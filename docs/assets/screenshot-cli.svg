@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 350" width="960" height="350" role="img" aria-label="install-brain.bat CLI output">
+  <!-- Terminal window frame -->
+  <rect x="0.5" y="0.5" width="959" height="349" rx="14" ry="14" fill="#111216" stroke="#262830" stroke-width="1" />
+
+  <!-- Title bar -->
+  <path d="M 1 14.5 Q 1 1 14.5 1 L 945.5 1 Q 959 1 959 14.5 L 959 40 L 1 40 Z" fill="#181A20" />
+  <line x1="1" y1="40" x2="959" y2="40" stroke="#262830" stroke-width="1" />
+
+  <!-- Window controls -->
+  <circle cx="24" cy="20.5" r="5.5" fill="#3F424E" />
+  <circle cx="44" cy="20.5" r="5.5" fill="#3F424E" />
+  <circle cx="64" cy="20.5" r="5.5" fill="#3F424E" />
+  <text x="480" y="25" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8B8F9E">PowerShell — install-brain.bat</text>
+
+  <!-- Terminal text -->
+  <g font-family="'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace" font-size="13.5">
+    <!-- Command 1 -->
+    <text x="24" y="72"><tspan fill="#FF6B00" font-weight="700">PS C:\Users\you\Brain&gt;</tspan><tspan fill="#E4E4E7"> .\install-brain.bat help</tspan></text>
+
+    <!-- Usage block -->
+    <text x="24" y="102" fill="#38BDF8" font-weight="700">Usage:</text>
+    <text x="40" y="126"><tspan fill="#E4E4E7">install-brain.bat</tspan><tspan fill="#9CA3AF">                  Install/update ~/.brain and all 3 tool skills (Claude Code, Codex, Antigravity)</tspan></text>
+    <text x="40" y="149"><tspan fill="#E4E4E7">install-brain.bat check [dir]</tspan><tspan fill="#9CA3AF">      Run Phase 0 refresh &amp; fingerprint check on a repository</tspan></text>
+    <text x="40" y="172"><tspan fill="#E4E4E7">install-brain.bat check-all [dir]</tspan><tspan fill="#9CA3AF">  Scan all sibling repositories and report AGENTS.md sync status</tspan></text>
+    <text x="40" y="195"><tspan fill="#E4E4E7">install-brain.bat sync [dir]</tspan><tspan fill="#9CA3AF">       Sync ~/.brain -&gt; &lt;dir&gt;/.brain, prune ghosts, and update .git/info/exclude</tspan></text>
+    <text x="40" y="218"><tspan fill="#E4E4E7">install-brain.bat hash [dir]</tspan><tspan fill="#9CA3AF">       Print the exact &lt;!-- brain-sync: &lt;12-char-sha256&gt; --&gt; line</tspan></text>
+    <text x="40" y="241"><tspan fill="#E4E4E7">install-brain.bat remove-legacy</tspan><tspan fill="#9CA3AF">    Remove legacy ~/.gemini/config/skills/agent-context-generator skill</tspan></text>
+
+    <!-- Command 2 -->
+    <text x="24" y="284"><tspan fill="#FF6B00" font-weight="700">PS C:\Users\you\Brain&gt;</tspan><tspan fill="#E4E4E7"> .\install-brain.bat check .</tspan></text>
+    <text x="24" y="310"><tspan fill="#4ADE80">Brain: AGENTS.md is up to date.</tspan><tspan fill="#9CA3AF"> [Lines: 34/120, Marker: 8d80a5ed2479, Master: 8d80a5ed2479]</tspan></text>
+  </g>
+</svg>

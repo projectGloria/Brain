@@ -1,124 +1,142 @@
+<div align="center">
+
+<img src="Monjita.png" width="110" alt="agent-brain icon" />
+
 # agent-brain
 
-Personal rules for AI coding agents, kept in one place and compiled into a short `AGENTS.md` for every project.
+Personal AI coding-agent rule compiler, multi-tool skill sync, and SHA-256 drift checker for Windows.
 
-You write your preferences once (always work on `main`, how to version, UI style, how to package with GloriaSetup, how to release). A skill called `monjita-init-brain` reads those rules, scans the repo, and writes a verified, size-capped `AGENTS.md` that Claude Code, Codex, and Antigravity all load automatically.
+<img src="https://img.shields.io/badge/PowerShell-Batch%20CLI-FF6B00?style=flat-square" alt="PowerShell Batch CLI" />
+<img src="https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20Antigravity-2b2d34?style=flat-square" alt="Supported Agents" />
+<img src="https://img.shields.io/badge/platform-Windows-2b2d34?style=flat-square" alt="Windows" />
+<img src="https://img.shields.io/github/last-commit/projectGloria/Brain?style=flat-square&color=FF6B00" alt="Last commit" />
+
+<br /><br />
+
+<img src="docs/assets/banner.svg" alt="agent-brain banner" width="100%" />
+
+<br /><br />
+
+[Features](#features) • [Screenshots](#screenshots) • [How it works](#how-it-works) • [Installation](#installation) • [Usage](#usage) • [Configuration](#configuration) • [Troubleshooting](#troubleshooting)
+
+</div>
+
+## About
+
+`agent-brain` is an offline-only Windows PowerShell utility wrapped in a single `install-brain.bat` entry point with zero external dependencies and no administrator elevation or symlinks required. It keeps personal coding-agent rules in `brain/*.md`, mirrors them to `%USERPROFILE%\.brain\`, compiles the `monjita-init-brain` skill from `brain/init.md` for Claude Code, Codex, and Antigravity, and tracks rule drift across repositories using a deterministic 12-character SHA-256 `<!-- brain-sync: <hash> -->` fingerprint embedded in each project's `AGENTS.md`.
+
+## Features
+
+- **Single-source skill compilation** — `install-brain.bat` compiles `brain/init.md` into `skills/claude-code/`, `skills/codex/`, and `skills/antigravity/` (`monjita-init-brain/SKILL.md`), injecting tool-specific frontmatter and `$ARGUMENTS` syntax for Claude Code so the three tool copies stay in sync.
+- **Multi-tool skill installation** — Installs `monjita-init-brain`, `monjita-github-repo-about`, and `monjita-github-repo-readme` directly into `C:\Users\you\.claude\skills\`, `C:\Users\you\.agents\skills\`, and `C:\Users\you\.gemini\config\skills\`, and removes legacy `init-brain` folders automatically.
+- **Deterministic SHA-256 drift checking** — Normalizes rule files to LF, strips trailing newlines, and computes a 12-character hex digest (`<!-- brain-sync: <hash> -->`) verified by `check` and `check-all` alongside a 120-line budget check and manifest/workflow mtime drift detection.
+- **Managed mirror with ghost pruning** — Syncing `~/.brain/` into `<project>/.brain/` overwrites stale rules, removes deleted master files, preserves untracked `local-*.md` project playbooks, and hides `.brain/` via `.git/info/exclude` instead of modifying `.gitignore`.
+- **Trait-filtered rule compilation** — Supports `inline` rules (compiled into `## Personal Rules (Brain)`) and `reference` playbooks (one-line triggers under `## Playbooks (Read Before Task)`), with YAML `apply_when` traits and per-bullet `[trait]` tags.
+- **Deterministic section ownership** — Refreshes regenerate `.brain/`-owned sections from scratch while preserving manual `## Repo Guardrails & Gotchas` entries; matching `**<Topic>:**` repo guardrails override conflicting `.brain/` rules.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/assets/screenshot-cli.svg" alt="install-brain.bat CLI help and check output" width="720" />
+  <br />
+  <em>Silent CLI output from <code>install-brain.bat help</code> and <code>install-brain.bat check .</code> showing available subcommands, line budget, and SHA-256 sync marker verification.</em>
+</p>
 
 ## How it works
 
-```
-~/.brain/            master rules (you edit these, or run install-brain.bat)
-    │  /monjita-init-brain
-    ▼
-<project>/.brain/    managed mirror of master rules (untracked via .git/info/exclude)
-<project>/AGENTS.md  compiled: repo facts + your rules (max 120 lines)
-<project>/CLAUDE.md  one line: @AGENTS.md
-```
-
-- **`inline` rules** are compiled straight into `AGENTS.md` under `## Personal Rules (Brain)`.
-- **`reference` rules** stay in `.brain/<file>.md`, and `AGENTS.md` gets a one-line trigger pointer under `## Playbooks (Read Before Task)` saying when to read them.
-- **Section ownership is deterministic:** on refresh, `## Personal Rules (Brain)` and `## Playbooks (Read Before Task)` are regenerated from scratch from `.brain/*.md`, while `## Repo Guardrails & Gotchas` preserves manual repo-specific rules (and overrides any `.brain/` rule with the same `**<Topic>:**` key).
-- Nothing is written until you reply `apply`.
-
-## Repo layout
-
-```
-install-brain.bat               one-command installer, skill compiler, and SHA-256 sync checker
-brain/                          master rules + the tool-agnostic prompt
-  workflow.md                   branching on main + working-tree alpha versioning
-  ui-preferences.md             frameless desktop chrome, themed scrollbars, interactive states
-  commit-and-push.md            single-sentence commit format, push policy, path privacy
-  building-the-project.md       GloriaSetup packaging & dry-run verification playbook
-  github-actions.md             3-stage CI release pipeline (version -> build -> publish)
-  init.md                       canonical source of the monjita-init-brain skill prompt
-skills/
-  claude-code/
-    monjita-init-brain/SKILL.md
-    monjita-github-repo-about/SKILL.md
-    monjita-github-repo-readme/SKILL.md
-  codex/
-    monjita-init-brain/SKILL.md
-    monjita-github-repo-about/SKILL.md
-    monjita-github-repo-readme/SKILL.md
-  antigravity/
-    monjita-init-brain/SKILL.md
-    monjita-github-repo-about/SKILL.md
-    monjita-github-repo-readme/SKILL.md
+```mermaid
+flowchart LR
+    A["brain/*.md + brain/init.md"] --> B["install-brain.bat"]
+    B --> C["%USERPROFILE%/.brain/ (Master Rules)"]
+    B --> D["skills/ -> Claude Code, Codex, Antigravity"]
+    C --> E["/monjita-init-brain (or sync)"]
+    D --> E
+    E --> F["project/.brain/ (Untracked Mirror)"]
+    E --> G["project/AGENTS.md (Max 120 Lines) + CLAUDE.md"]
+    G --> H{"install-brain.bat check"}
+    H -- "SHA-256 Match & <= 120 Lines" --> I["UP TO DATE"]
+    H -- "Hash Mismatch / Newer Manifest" --> J["BRAIN DRIFT / REPO DRIFT"]
 ```
 
-## Install & CLI helper (`install-brain.bat`)
+## Installation
 
-Run `install-brain.bat` from the repo root (or double-click it in Explorer). In one step it:
-1. Compiles `brain/init.md` into all three tool `monjita-init-brain/SKILL.md` files under `skills/` so they never drift out of sync.
-2. Syncs `brain/*.md` (and `install-brain.bat`) into `%USERPROFILE%\.brain\`, pruning any deleted ghost files.
-3. Installs all skills (`monjita-init-brain`, `monjita-github-repo-about`, `monjita-github-repo-readme`) into Claude Code, Codex, and Antigravity (and cleans up any legacy `init-brain` folder):
+Clone the repository and run `install-brain.bat` from the repository root (or double-click it in Windows Explorer):
+
+```powershell
+.\install-brain.bat
+```
+
+In a single run, `install-brain.bat`:
+1. Compiles `brain/init.md` into the three `skills/<tool>/monjita-init-brain/SKILL.md` files.
+2. Mirrors `brain/*.md` and `install-brain.bat` into `C:\Users\you\.brain\`, pruning deleted non-`local-*.md` files.
+3. Installs all skills under `skills/` into:
    - Claude Code: `C:\Users\you\.claude\skills\<skill>\SKILL.md`
    - Codex: `C:\Users\you\.agents\skills\<skill>\SKILL.md`
    - Antigravity: `C:\Users\you\.gemini\config\skills\<skill>\SKILL.md`
-4. Computes and verifies the master `<!-- brain-sync: <12-char-sha256> -->` fingerprint.
+4. Prints the master `<!-- brain-sync: <12-char-sha256> -->` fingerprint and checks master rule files for unfilled `<...>` stub placeholders.
 
-### `install-brain.bat` commands
+## Usage
 
-| Command | What it does |
+### CLI (`install-brain.bat`)
+
+| Command | Behavior |
 |---|---|
-| `.\install-brain.bat` | Syncs the 3 `monjita-init-brain/SKILL.md` files from `brain\init.md`, installs `~/.brain/`, and installs all skills for all 3 tools |
-| `.\install-brain.bat check [dir]` | Deterministically checks whether a repo's `AGENTS.md` matches the master brain fingerprint and line budget |
-| `.\install-brain.bat check-all [dir]` | Scans all sibling repositories (e.g. `projectGloria`) and prints a table of `AGENTS.md` sync status |
-| `.\install-brain.bat sync [dir]` | Syncs `~/.brain/*.md` into `<dir>/.brain/`, prunes ghost files, and ensures `.brain/` is in `.git/info/exclude` |
-| `.\install-brain.bat hash [dir]` | Prints the exact `<!-- brain-sync: <12-char-sha256> -->` marker |
-| `.\install-brain.bat remove-legacy` | Removes the old `~/.gemini/config/skills/agent-context-generator` skill so it doesn't collide with `monjita-init-brain` |
+| `.\install-brain.bat` | Compiles `monjita-init-brain/SKILL.md` from `brain/init.md`, mirrors `~/.brain/`, and installs all skills for all 3 tools |
+| `.\install-brain.bat check [dir]` | Verifies `AGENTS.md` sync marker against the master SHA-256 fingerprint, line budget (`<= 120`), and manifest/workflow drift |
+| `.\install-brain.bat check-all [dir]` | Scans all sibling folders (defaults to the parent of the repo) and prints a status table across repositories |
+| `.\install-brain.bat sync [dir]` | Copies `~/.brain/*.md` into `<dir>/.brain/`, prunes deleted master files (preserving `local-*.md`), and adds `.brain/` to `.git/info/exclude` |
+| `.\install-brain.bat hash [dir]` | Outputs the exact `<!-- brain-sync: <12-char-sha256> -->` marker for the target directory |
+| `.\install-brain.bat remove-legacy` | Deletes the old `C:\Users\you\.gemini\config\skills\agent-context-generator` folder so it does not collide with `monjita-init-brain` |
 
-## Agent Usage
+### Agent Skill (`/monjita-init-brain`)
 
-| You type | What happens |
+| Prompt | Behavior |
 |---|---|
-| `/monjita-init-brain` | Detects the mode, previews `AGENTS.md` plus a report, waits for `apply` |
-| `/monjita-init-brain check` | Read-only: reports whether `AGENTS.md` is up to date, then stops |
-| `/monjita-init-brain learn <rule>` | Persists a new repo guardrail into `AGENTS.md` or a global rule into `~/.brain/*.md`, previews, waits for `apply` |
-| `/monjita-init-brain Tauri desktop app for X` | For an empty folder: gives the agent the stack so it doesn't have to ask |
+| `/monjita-init-brain` | Detects mode (Bootstrap, Initial generation, or Refresh), previews `AGENTS.md` and a report, and waits for `apply` before writing |
+| `/monjita-init-brain check` | Read-only check reporting whether `AGENTS.md` matches the master brain fingerprint and repo state, then stops |
+| `/monjita-init-brain learn <rule>` | Stages a new repo guardrail in `AGENTS.md` or global rule in `~/.brain/*.md`, previews the diff, and waits for `apply` |
+| `/monjita-init-brain <project description>` | Bootstraps an empty folder with matching personal rules and stages `git init -b main` |
 
-Modes are chosen automatically:
+## Configuration
 
-- **Bootstrap:** empty folder. Writes a short `AGENTS.md` with your rules only, and stages `git init -b main`.
-- **Initial generation:** existing code with no `AGENTS.md`.
-- **Refresh:** existing `AGENTS.md`. Prunes stale entries, regenerates your `.brain/` sections, and preserves your manual repo guardrails.
-- **Learn:** adds a single repo-specific or global rule without a full manual edit cycle.
+### Rule File Frontmatter (`brain/*.md`)
 
-**When to run it:** when you start a project, when you change a rule in `brain/` (after running `install-brain.bat`), or after a big refactor. In Codex and Antigravity, ask the agent to run `monjita-init-brain` (or pick it from the skills list).
-
-## Brain file format
-
-Every file in `brain/` starts with YAML frontmatter:
+Every rule file in `brain/` (except `brain/init.md`) begins with YAML frontmatter:
 
 ```yaml
 ---
-apply_when: desktop-gui, windows-app   # when this file matters
-mode: inline                           # or: reference
-trigger: Before building an installer  # reference files only
+apply_when: desktop-gui, windows-app   # traits that activate this file
+mode: inline                           # inline | reference
+trigger: Before building an installer  # required for mode: reference
 ---
 ```
 
-Recognized `apply_when` traits:
-`always`, `desktop-gui`, `windows-app`, `web-ui`, `browser-extension`, `android-app`, `cli-backend`, `has-github-remote`.
+Recognized `apply_when` traits: `always`, `desktop-gui`, `windows-app`, `web-ui`, `browser-extension`, `android-app`, `cli-backend`, `has-github-remote`.
 
-### Per-bullet trait filters
-Inside a `mode: inline` file, individual bullets can restrict themselves to specific traits using a `[trait]` prefix:
+### Per-Bullet Trait Filters
+
+Inside `mode: inline` files, individual bullets can restrict themselves to specific traits with a `[trait]` prefix:
 
 ```markdown
-- [desktop-gui] **Window Chrome:** Disable native OS titlebars...
+- [desktop-gui] **Window Chrome:** Disable native OS titlebars; build an integrated frameless titlebar...
 - **Scrollbars:** Ban raw OS scrollbars; use thin (4–6px) themed scrollbars...
 ```
 
-When compiled into a `web-ui` or `browser-extension` repo, `[desktop-gui]` bullets are automatically skipped; when compiled into a `desktop-gui` repo, the `[desktop-gui]` tag is stripped and the rule is included.
+When compiled into a `web-ui` or `browser-extension` repo, `[desktop-gui]` bullets are omitted. In a `desktop-gui` repo, the `[desktop-gui]` prefix is stripped and the bullet is included.
 
-### Project-only playbooks (`local-*.md`)
-On sync, `<project>/.brain/` mirrors `~/.brain/` and deletes stale files that were removed from `~/.brain/`. If a project needs an untracked local playbook that doesn't exist in `~/.brain/`, name it `.brain/local-<name>.md` so sync preserves it (or keep tracked architecture docs in `docs/`).
+### Project-Only Playbooks (`local-*.md`)
 
-## Guarantees
+Syncing `<project>/.brain/` mirrors `~/.brain/` and removes files no longer present in `~/.brain/`. To keep an untracked, project-only playbook in `<project>/.brain/`, prefix its filename with `local-` (for example, `.brain/local-release-notes.md`).
 
-- `AGENTS.md` is capped at 120 lines (target 40–90) and ends with a deterministic `<!-- brain-sync: <12-char-sha256> -->` marker.
-- Every command, path, and version manifest in `AGENTS.md` is verified against the workspace. Nothing is invented.
-- Stays on `main`: never creates branches or worktrees, never runs `git checkout`.
-- Never runs `git add`, `commit`, or `push`, and never bumps versions during context generation.
-- `.brain/` is hidden from Git through `.git/info/exclude`, not `.gitignore`.
-- No symlinks, so it works natively on Windows without elevation.
+### Repository Layout
+
+- `install-brain.bat` — Hybrid batch/PowerShell CLI (`# --- POWERSHELL_START ---` payload) for installation, skill compilation, syncing, and drift checks.
+- `brain/` — Canonical master rules (`workflow.md`, `commit-and-push.md`, `ui-preferences.md`, `building-the-project.md`, `github-actions.md`) and the tool-agnostic `init.md` prompt.
+- `skills/` — Per-tool skill folders for `claude-code/`, `codex/`, and `antigravity/` (`monjita-init-brain`, `monjita-github-repo-about`, `monjita-github-repo-readme`).
+
+## Troubleshooting
+
+- **Edits to `skills/*/monjita-init-brain/SKILL.md` disappear after install:** `monjita-init-brain/SKILL.md` is generated from `brain/init.md`. Edit `brain/init.md` and re-run `.\install-brain.bat`.
+- **Skill compilation throws `Could not find '## Non-Negotiable Rules'`:** `Sync-SkillFilesFromInit` slices `brain/init.md` at the exact `## Non-Negotiable Rules` heading. Keep that heading intact.
+- **`check` reports `BRAIN DRIFT`, `NO MARKER`, or `OVER BUDGET`:** Run `/monjita-init-brain` in the affected repository to refresh `AGENTS.md` within the 120-line cap and update its `<!-- brain-sync: ... -->` footer, then confirm with `.\install-brain.bat check .`.
+- **Antigravity invokes the old `agent-context-generator` skill:** Run `.\install-brain.bat remove-legacy` to remove `C:\Users\you\.gemini\config\skills\agent-context-generator`.
