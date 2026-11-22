@@ -78,10 +78,10 @@ function Sync-SkillFilesFromInit([string]$RepoRoot) {
 
     $stdHeader = @"
 ---
-name: init-brain
-description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.
+name: monjita-init-brain
+description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run monjita-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.
 ---
-# init-brain — Project Context & Brain Compiler
+# monjita-init-brain — Project Context & Brain Compiler
 
 Generate, bootstrap, refresh, or update ``AGENTS.md`` by combining **repository ground truth** with matching personal rules from ``.brain/*.md``, enforcing a strict 120-line budget and aggressive pruning on every run.
 
@@ -91,12 +91,12 @@ User arguments: any text the user typed when invoking this skill (e.g. ``check``
 
     $claudeHeader = @"
 ---
-name: init-brain
-description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.
+name: monjita-init-brain
+description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for monjita-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.
 argument-hint: "[check] | [learn <rule>] | [short project description for bootstrap]"
 disable-model-invocation: true
 ---
-# /init-brain — Project Context & Brain Compiler
+# /monjita-init-brain — Project Context & Brain Compiler
 
 Generate, bootstrap, refresh, or update ``AGENTS.md`` by combining **repository ground truth** with matching personal rules from ``.brain/*.md``, enforcing a strict 120-line budget and aggressive pruning on every run.
 
@@ -109,9 +109,9 @@ User arguments: ```$ARGUMENTS``
         -replace "If the user's invocation text is exactly", 'If `$ARGUMENTS` is exactly' `
         -replace "If neither the invocation text nor", 'If neither `$ARGUMENTS` nor'
 
-    Write-Utf8NoBom (Join-Path $RepoRoot 'skills\antigravity\init-brain\SKILL.md') ($stdHeader + $body)
-    Write-Utf8NoBom (Join-Path $RepoRoot 'skills\codex\init-brain\SKILL.md')       ($stdHeader + $body)
-    Write-Utf8NoBom (Join-Path $RepoRoot 'skills\claude-code\init-brain\SKILL.md') ($claudeHeader + $claudeBody)
+    Write-Utf8NoBom (Join-Path $RepoRoot 'skills\antigravity\monjita-init-brain\SKILL.md') ($stdHeader + $body)
+    Write-Utf8NoBom (Join-Path $RepoRoot 'skills\codex\monjita-init-brain\SKILL.md')       ($stdHeader + $body)
+    Write-Utf8NoBom (Join-Path $RepoRoot 'skills\claude-code\monjita-init-brain\SKILL.md') ($claudeHeader + $claudeBody)
     return $true
 }
 
@@ -162,18 +162,32 @@ function Invoke-Install {
     }
 
     if ($isRepoRoot) {
-        $targets = @(
-            @{ Tool = 'Claude Code'; Src = 'skills\claude-code\init-brain\SKILL.md'; Dst = Join-Path $UserHome '.claude\skills\init-brain\SKILL.md' },
-            @{ Tool = 'Codex';       Src = 'skills\codex\init-brain\SKILL.md';       Dst = Join-Path $UserHome '.agents\skills\init-brain\SKILL.md' },
-            @{ Tool = 'Antigravity'; Src = 'skills\antigravity\init-brain\SKILL.md'; Dst = Join-Path $UserHome '.gemini\config\skills\init-brain\SKILL.md' }
+        $toolTargets = @(
+            @{ Tool = 'Claude Code'; SrcRoot = 'skills\claude-code'; DstRoot = Join-Path $UserHome '.claude\skills' },
+            @{ Tool = 'Codex';       SrcRoot = 'skills\codex';       DstRoot = Join-Path $UserHome '.agents\skills' },
+            @{ Tool = 'Antigravity'; SrcRoot = 'skills\antigravity'; DstRoot = Join-Path $UserHome '.gemini\config\skills' }
         )
-        Write-Host "[3/3] Installed init-brain skills:" -ForegroundColor Green
-        foreach ($t in $targets) {
-            $srcPath = Join-Path $ScriptDir $t.Src
-            $dstDir  = Split-Path -Parent $t.Dst
-            New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
-            Copy-Item -LiteralPath $srcPath -Destination $t.Dst -Force
-            Write-Host ("      - {0,-12} -> {1}" -f $t.Tool, $t.Dst)
+        Write-Host "[3/3] Installed skills:" -ForegroundColor Green
+        foreach ($t in $toolTargets) {
+            $srcRootPath = Join-Path $ScriptDir $t.SrcRoot
+            if (-not (Test-Path -LiteralPath $srcRootPath)) { continue }
+
+            # Remove renamed legacy init-brain folder so it does not collide with monjita-init-brain
+            $oldInitDir = Join-Path $t.DstRoot 'init-brain'
+            if (Test-Path -LiteralPath $oldInitDir) {
+                Remove-Item -LiteralPath $oldInitDir -Recurse -Force
+            }
+
+            $skillDirs = Get-ChildItem -LiteralPath $srcRootPath -Directory | Sort-Object Name
+            foreach ($sd in $skillDirs) {
+                $srcFile = Join-Path $sd.FullName 'SKILL.md'
+                if (-not (Test-Path -LiteralPath $srcFile)) { continue }
+                $dstDir  = Join-Path $t.DstRoot $sd.Name
+                $dstFile = Join-Path $dstDir 'SKILL.md'
+                New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+                Copy-Item -LiteralPath $srcFile -Destination $dstFile -Force
+                Write-Host ("      - {0,-12} {1,-28} -> {2}" -f $t.Tool, $sd.Name, $dstFile)
+            }
         }
     }
 
@@ -200,7 +214,7 @@ function Invoke-Install {
     if (Test-Path -LiteralPath $legacySkill) {
         Write-Host ""
         Write-Host "Note: Legacy skill found at $legacySkill" -ForegroundColor Yellow
-        Write-Host "      Run 'install-brain.bat remove-legacy' to remove it so it does not collide with init-brain." -ForegroundColor Yellow
+        Write-Host "      Run 'install-brain.bat remove-legacy' to remove it so it does not collide with monjita-init-brain." -ForegroundColor Yellow
     }
 }
 

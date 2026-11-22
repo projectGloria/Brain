@@ -1,6 +1,6 @@
 # INIT.md — Project Context & Brain Compiler (tool-agnostic)
 
-> Plain-markdown copy of the `init-brain` skill. Paste it into any agent as a prompt, or point the agent at it. The agent-specific skills in `skills/` carry the same body.
+> Plain-markdown copy of the `monjita-init-brain` skill. Paste it into any agent as a prompt, or point the agent at it. The agent-specific skills in `skills/` carry the same body.
 
 Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.
 

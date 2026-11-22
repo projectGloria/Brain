@@ -2,13 +2,13 @@
 
 Personal rules for AI coding agents, kept in one place and compiled into a short `AGENTS.md` for every project.
 
-You write your preferences once (always work on `main`, how to version, UI style, how to package with GloriaSetup, how to release). A skill called `init-brain` reads those rules, scans the repo, and writes a verified, size-capped `AGENTS.md` that Claude Code, Codex, and Antigravity all load automatically.
+You write your preferences once (always work on `main`, how to version, UI style, how to package with GloriaSetup, how to release). A skill called `monjita-init-brain` reads those rules, scans the repo, and writes a verified, size-capped `AGENTS.md` that Claude Code, Codex, and Antigravity all load automatically.
 
 ## How it works
 
 ```
 ~/.brain/            master rules (you edit these, or run install-brain.bat)
-    │  /init-brain
+    │  /monjita-init-brain
     ▼
 <project>/.brain/    managed mirror of master rules (untracked via .git/info/exclude)
 <project>/AGENTS.md  compiled: repo facts + your rules (max 120 lines)
@@ -30,43 +30,52 @@ brain/                          master rules + the tool-agnostic prompt
   commit-and-push.md            single-sentence commit format, push policy, path privacy
   building-the-project.md       GloriaSetup packaging & dry-run verification playbook
   github-actions.md             3-stage CI release pipeline (version -> build -> publish)
-  init.md                       canonical source of the init-brain skill prompt
+  init.md                       canonical source of the monjita-init-brain skill prompt
 skills/
-  claude-code/init-brain/SKILL.md
-  codex/init-brain/SKILL.md
-  antigravity/init-brain/SKILL.md
+  claude-code/
+    monjita-init-brain/SKILL.md
+    monjita-github-repo-about/SKILL.md
+    monjita-github-repo-readme/SKILL.md
+  codex/
+    monjita-init-brain/SKILL.md
+    monjita-github-repo-about/SKILL.md
+    monjita-github-repo-readme/SKILL.md
+  antigravity/
+    monjita-init-brain/SKILL.md
+    monjita-github-repo-about/SKILL.md
+    monjita-github-repo-readme/SKILL.md
 ```
 
 ## Install & CLI helper (`install-brain.bat`)
 
 Run `install-brain.bat` from the repo root (or double-click it in Explorer). In one step it:
-1. Compiles `brain/init.md` into all three tool `SKILL.md` files under `skills/` so they never drift out of sync.
+1. Compiles `brain/init.md` into all three tool `monjita-init-brain/SKILL.md` files under `skills/` so they never drift out of sync.
 2. Syncs `brain/*.md` (and `install-brain.bat`) into `%USERPROFILE%\.brain\`, pruning any deleted ghost files.
-3. Installs the `init-brain` skill into Claude Code, Codex, and Antigravity:
-   - Claude Code: `C:\Users\you\.claude\skills\init-brain\SKILL.md`
-   - Codex: `C:\Users\you\.agents\skills\init-brain\SKILL.md`
-   - Antigravity: `C:\Users\you\.gemini\config\skills\init-brain\SKILL.md`
+3. Installs all skills (`monjita-init-brain`, `monjita-github-repo-about`, `monjita-github-repo-readme`) into Claude Code, Codex, and Antigravity (and cleans up any legacy `init-brain` folder):
+   - Claude Code: `C:\Users\you\.claude\skills\<skill>\SKILL.md`
+   - Codex: `C:\Users\you\.agents\skills\<skill>\SKILL.md`
+   - Antigravity: `C:\Users\you\.gemini\config\skills\<skill>\SKILL.md`
 4. Computes and verifies the master `<!-- brain-sync: <12-char-sha256> -->` fingerprint.
 
 ### `install-brain.bat` commands
 
 | Command | What it does |
 |---|---|
-| `.\install-brain.bat` | Syncs the 3 `SKILL.md` files from `brain\init.md`, installs `~/.brain/`, and installs all 3 tool skills |
+| `.\install-brain.bat` | Syncs the 3 `monjita-init-brain/SKILL.md` files from `brain\init.md`, installs `~/.brain/`, and installs all skills for all 3 tools |
 | `.\install-brain.bat check [dir]` | Deterministically checks whether a repo's `AGENTS.md` matches the master brain fingerprint and line budget |
 | `.\install-brain.bat check-all [dir]` | Scans all sibling repositories (e.g. `projectGloria`) and prints a table of `AGENTS.md` sync status |
 | `.\install-brain.bat sync [dir]` | Syncs `~/.brain/*.md` into `<dir>/.brain/`, prunes ghost files, and ensures `.brain/` is in `.git/info/exclude` |
 | `.\install-brain.bat hash [dir]` | Prints the exact `<!-- brain-sync: <12-char-sha256> -->` marker |
-| `.\install-brain.bat remove-legacy` | Removes the old `~/.gemini/config/skills/agent-context-generator` skill so it doesn't collide with `init-brain` |
+| `.\install-brain.bat remove-legacy` | Removes the old `~/.gemini/config/skills/agent-context-generator` skill so it doesn't collide with `monjita-init-brain` |
 
 ## Agent Usage
 
 | You type | What happens |
 |---|---|
-| `/init-brain` | Detects the mode, previews `AGENTS.md` plus a report, waits for `apply` |
-| `/init-brain check` | Read-only: reports whether `AGENTS.md` is up to date, then stops |
-| `/init-brain learn <rule>` | Persists a new repo guardrail into `AGENTS.md` or a global rule into `~/.brain/*.md`, previews, waits for `apply` |
-| `/init-brain Tauri desktop app for X` | For an empty folder: gives the agent the stack so it doesn't have to ask |
+| `/monjita-init-brain` | Detects the mode, previews `AGENTS.md` plus a report, waits for `apply` |
+| `/monjita-init-brain check` | Read-only: reports whether `AGENTS.md` is up to date, then stops |
+| `/monjita-init-brain learn <rule>` | Persists a new repo guardrail into `AGENTS.md` or a global rule into `~/.brain/*.md`, previews, waits for `apply` |
+| `/monjita-init-brain Tauri desktop app for X` | For an empty folder: gives the agent the stack so it doesn't have to ask |
 
 Modes are chosen automatically:
 
@@ -75,7 +84,7 @@ Modes are chosen automatically:
 - **Refresh:** existing `AGENTS.md`. Prunes stale entries, regenerates your `.brain/` sections, and preserves your manual repo guardrails.
 - **Learn:** adds a single repo-specific or global rule without a full manual edit cycle.
 
-**When to run it:** when you start a project, when you change a rule in `brain/` (after running `install-brain.bat`), or after a big refactor. In Codex and Antigravity, ask the agent to run `init-brain` (or pick it from the skills list).
+**When to run it:** when you start a project, when you change a rule in `brain/` (after running `install-brain.bat`), or after a big refactor. In Codex and Antigravity, ask the agent to run `monjita-init-brain` (or pick it from the skills list).
 
 ## Brain file format
 

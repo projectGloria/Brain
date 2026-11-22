@@ -1,10 +1,10 @@
 ---
-name: init-brain
-description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.
+name: monjita-init-brain
+description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for monjita-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.
 argument-hint: "[check] | [learn <rule>] | [short project description for bootstrap]"
 disable-model-invocation: true
 ---
-# /init-brain — Project Context & Brain Compiler
+# /monjita-init-brain — Project Context & Brain Compiler
 
 Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.
 
