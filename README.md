@@ -2,85 +2,80 @@
 
 Personal rules for AI coding agents, kept in one place and compiled into a short `AGENTS.md` for every project.
 
-You write your preferences once (always work on `main`, how to version, UI style, how to build). A skill called `init-brain` reads those rules, scans the repo, and writes a verified, size-capped `AGENTS.md` that Claude Code, Codex, and Antigravity all load automatically.
+You write your preferences once (always work on `main`, how to version, UI style, how to package with GloriaSetup, how to release). A skill called `init-brain` reads those rules, scans the repo, and writes a verified, size-capped `AGENTS.md` that Claude Code, Codex, and Antigravity all load automatically.
 
 ## How it works
 
 ```
-~/.brain/            master rules (you edit these)
+~/.brain/            master rules (you edit these, or run install-brain.bat)
     │  /init-brain
     ▼
-<project>/.brain/    synced copy of the master
+<project>/.brain/    managed mirror of master rules (untracked via .git/info/exclude)
 <project>/AGENTS.md  compiled: repo facts + your rules (max 120 lines)
 <project>/CLAUDE.md  one line: @AGENTS.md
 ```
 
-- **`inline` rules** are copied straight into `AGENTS.md`.
-- **`reference` rules** stay in `.brain/<file>.md`, and `AGENTS.md` gets a one-line pointer saying when to read them.
+- **`inline` rules** are compiled straight into `AGENTS.md` under `## Personal Rules (Brain)`.
+- **`reference` rules** stay in `.brain/<file>.md`, and `AGENTS.md` gets a one-line trigger pointer under `## Playbooks (Read Before Task)` saying when to read them.
+- **Section ownership is deterministic:** on refresh, `## Personal Rules (Brain)` and `## Playbooks (Read Before Task)` are regenerated from scratch from `.brain/*.md`, while `## Repo Guardrails & Gotchas` preserves manual repo-specific rules (and overrides any `.brain/` rule with the same `**<Topic>:**` key).
 - Nothing is written until you reply `apply`.
 
 ## Repo layout
 
 ```
-brain/                        master rules + the tool-agnostic prompt
-  workflow.md                 branching + versioning
-  ui-preferences.md           window chrome, scrollbars, native feel
-  commit-and-push.md          commit format + push policy   (TODO: fill in)
-  building-the-project.md     GloriaSetup build rules       (TODO: fill in)
-  github-actions.md           CI + release rules            (TODO: fill in)
-  init.md                     plain-markdown copy of the skill
+install-brain.bat               one-command installer, skill compiler, and SHA-256 sync checker
+brain/                          master rules + the tool-agnostic prompt
+  workflow.md                   branching on main + working-tree alpha versioning
+  ui-preferences.md             frameless desktop chrome, themed scrollbars, interactive states
+  commit-and-push.md            single-sentence commit format, push policy, path privacy
+  building-the-project.md       GloriaSetup packaging & dry-run verification playbook
+  github-actions.md             3-stage CI release pipeline (version -> build -> publish)
+  init.md                       canonical source of the init-brain skill prompt
 skills/
   claude-code/init-brain/SKILL.md
   codex/init-brain/SKILL.md
   antigravity/init-brain/SKILL.md
 ```
 
-## Install
+## Install & CLI helper (`install-brain.bat`)
 
-### 1. Master brain
+Run `install-brain.bat` from the repo root (or double-click it in Explorer). In one step it:
+1. Compiles `brain/init.md` into all three tool `SKILL.md` files under `skills/` so they never drift out of sync.
+2. Syncs `brain/*.md` (and `install-brain.bat`) into `%USERPROFILE%\.brain\`, pruning any deleted ghost files.
+3. Installs the `init-brain` skill into Claude Code, Codex, and Antigravity:
+   - Claude Code: `C:\Users\you\.claude\skills\init-brain\SKILL.md`
+   - Codex: `C:\Users\you\.agents\skills\init-brain\SKILL.md`
+   - Antigravity: `C:\Users\you\.gemini\config\skills\init-brain\SKILL.md`
+4. Computes and verifies the master `<!-- brain-sync: <12-char-sha256> -->` fingerprint.
 
-Copy the contents of `brain/` into `~/.brain/` (Windows: `C:\Users\<you>\.brain\`). The `.md` files go directly inside it, with no extra nested folder.
+### `install-brain.bat` commands
 
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.brain" | Out-Null
-Copy-Item .\brain\*.md "$env:USERPROFILE\.brain\"
-```
-
-### 2. The skill (one per tool you use)
-
-| Tool | Copy `SKILL.md` into |
+| Command | What it does |
 |---|---|
-| Claude Code | `~/.claude/skills/init-brain/` |
-| Codex | `~/.agents/skills/init-brain/` |
-| Antigravity | `~/.gemini/config/skills/init-brain/` |
+| `.\install-brain.bat` | Syncs the 3 `SKILL.md` files from `brain\init.md`, installs `~/.brain/`, and installs all 3 tool skills |
+| `.\install-brain.bat check [dir]` | Deterministically checks whether a repo's `AGENTS.md` matches the master brain fingerprint and line budget |
+| `.\install-brain.bat check-all [dir]` | Scans all sibling repositories (e.g. `projectGloria`) and prints a table of `AGENTS.md` sync status |
+| `.\install-brain.bat sync [dir]` | Syncs `~/.brain/*.md` into `<dir>/.brain/`, prunes ghost files, and ensures `.brain/` is in `.git/info/exclude` |
+| `.\install-brain.bat hash [dir]` | Prints the exact `<!-- brain-sync: <12-char-sha256> -->` marker |
+| `.\install-brain.bat remove-legacy` | Removes the old `~/.gemini/config/skills/agent-context-generator` skill so it doesn't collide with `init-brain` |
 
-The folder must be named `init-brain` and the file must be named `SKILL.md`. Restart the tool or open a new chat afterward.
-
-```powershell
-# Claude Code example
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills\init-brain" | Out-Null
-Copy-Item .\skills\claude-code\init-brain\SKILL.md "$env:USERPROFILE\.claude\skills\init-brain\"
-```
-
-If Antigravity doesn't pick the skill up, try `~/.gemini/antigravity/skills/init-brain/`, the path older docs used.
-
-## Usage
+## Agent Usage
 
 | You type | What happens |
 |---|---|
 | `/init-brain` | Detects the mode, previews `AGENTS.md` plus a report, waits for `apply` |
 | `/init-brain check` | Read-only: reports whether `AGENTS.md` is up to date, then stops |
+| `/init-brain learn <rule>` | Persists a new repo guardrail into `AGENTS.md` or a global rule into `~/.brain/*.md`, previews, waits for `apply` |
 | `/init-brain Tauri desktop app for X` | For an empty folder: gives the agent the stack so it doesn't have to ask |
 
 Modes are chosen automatically:
 
 - **Bootstrap:** empty folder. Writes a short `AGENTS.md` with your rules only, and stages `git init -b main`.
 - **Initial generation:** existing code with no `AGENTS.md`.
-- **Refresh:** existing `AGENTS.md`. Prunes stale entries, re-syncs your rules, and keeps your manual guardrails.
+- **Refresh:** existing `AGENTS.md`. Prunes stale entries, regenerates your `.brain/` sections, and preserves your manual repo guardrails.
+- **Learn:** adds a single repo-specific or global rule without a full manual edit cycle.
 
-**When to run it:** when you start a project, when you change a rule in `~/.brain/`, or after a big refactor. You don't need it every session, because the agent loads `AGENTS.md` by itself. Use `check` to see if a refresh is due.
-
-In Codex and Antigravity, ask the agent to run `init-brain` (or pick it from the skills list) instead of typing a slash command.
+**When to run it:** when you start a project, when you change a rule in `brain/` (after running `install-brain.bat`), or after a big refactor. In Codex and Antigravity, ask the agent to run `init-brain` (or pick it from the skills list).
 
 ## Brain file format
 
@@ -94,27 +89,27 @@ trigger: Before building an installer  # reference files only
 ---
 ```
 
-`apply_when` traits: `always`, `desktop-gui`, `windows-app`, `web-ui`, `cli-backend`, `has-github-remote`. The skill detects these from the repo.
+Recognized `apply_when` traits:
+`always`, `desktop-gui`, `windows-app`, `web-ui`, `browser-extension`, `android-app`, `cli-backend`, `has-github-remote`.
 
-Placeholders like `<Your exact commit format>` are never copied into `AGENTS.md`. They are skipped and listed under **Incomplete Brain Files**. A `reference` file with no filled-in content gets no pointer at all.
+### Per-bullet trait filters
+Inside a `mode: inline` file, individual bullets can restrict themselves to specific traits using a `[trait]` prefix:
+
+```markdown
+- [desktop-gui] **Window Chrome:** Disable native OS titlebars...
+- **Scrollbars:** Ban raw OS scrollbars; use thin (4–6px) themed scrollbars...
+```
+
+When compiled into a `web-ui` or `browser-extension` repo, `[desktop-gui]` bullets are automatically skipped; when compiled into a `desktop-gui` repo, the `[desktop-gui]` tag is stripped and the rule is included.
+
+### Project-only playbooks (`local-*.md`)
+On sync, `<project>/.brain/` mirrors `~/.brain/` and deletes stale files that were removed from `~/.brain/`. If a project needs an untracked local playbook that doesn't exist in `~/.brain/`, name it `.brain/local-<name>.md` so sync preserves it (or keep tracked architecture docs in `docs/`).
 
 ## Guarantees
 
-- `AGENTS.md` is capped at 120 lines (target 40-90) and ends with a `brain-sync` marker used by `check`.
-- Every command and path in it is verified against the workspace. Nothing is invented.
+- `AGENTS.md` is capped at 120 lines (target 40–90) and ends with a deterministic `<!-- brain-sync: <12-char-sha256> -->` marker.
+- Every command, path, and version manifest in `AGENTS.md` is verified against the workspace. Nothing is invented.
 - Stays on `main`: never creates branches or worktrees, never runs `git checkout`.
-- Never runs `git add`, `commit`, or `push`, and never bumps versions.
+- Never runs `git add`, `commit`, or `push`, and never bumps versions during context generation.
 - `.brain/` is hidden from Git through `.git/info/exclude`, not `.gitignore`.
-- No symlinks, so it works on Windows.
-
-## Known gaps
-
-- `commit-and-push.md`, `building-the-project.md`, and `github-actions.md` still contain placeholders. Fill them in before relying on them.
-- "Bump the alpha number on every minimal change" in `workflow.md` doesn't define what counts as one change (per commit, per task, per turn).
-- The `100vw x 100vh` shell lock in `ui-preferences.md` suits desktop apps but would break an ordinary website. Consider scoping it to `desktop-gui`.
-- Because `.brain/` is excluded from Git, `reference` playbooks won't exist in other clones or on CI. The preview warns you about this when the repo has a GitHub remote.
-- The Codex and Antigravity skills have not been tested end to end. Their install paths come from each tool's docs, which change.
-
-## Keeping the three skills in sync
-
-The three `SKILL.md` files share the same body. The Claude Code one differs only in its frontmatter (`argument-hint`, `disable-model-invocation: true`) and in using `$ARGUMENTS`. When you change a rule or phase, edit one file and copy the change into the other two.
+- No symlinks, so it works natively on Windows without elevation.
