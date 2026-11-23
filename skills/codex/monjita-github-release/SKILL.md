@@ -15,6 +15,7 @@ Cut a new release in a single prompt turn: show the current version and ask for 
 3. **Source truth only:** Never guess executable names, build scripts, icon paths, or staging directories. Inspect the repo's actual manifests and scripts before writing `gloria.toml` or `.github/workflows/release.yml`.
 4. **Main branch push trigger (no manual git tags):** Always work directly on `main`. Never create branches or run `git tag` manually—pushing the version-bumped commit to `origin main` triggers `.github/workflows/release.yml`, which builds the installer and publishes the `v<version>` release to GitHub Releases.
 5. **Path privacy:** Always use `C:\Users\you` in any comments, docs, or examples—never hardcode the local machine's real username.
+6. **GloriaSetup itself is special:** If the repository is GloriaSetup (it has `crates/gloria-pack/` and `npm/package.json` named `gloria-setup`), it is the installer builder, not an app. Skip Phases 2 and 3 entirely and follow **"Releasing GloriaSetup itself"** below instead. Never create `gloria.toml`, never replace or edit its `.github/workflows/release.yml`, and never pack it with `gloria-setup`.
 
 ---
 
@@ -107,6 +108,21 @@ Inspect `.github/workflows/release.yml`. Create it if missing, or update it if i
      sha256sum "*_x64-setup.exe" > SHA256SUMS.txt
      ```
    - Create a draft GitHub Release `v<version>` with `gh release create` (passing `--prerelease` automatically whenever `<version>` contains `-`, e.g. `-alpha.1`), upload `<Name>_<version>_x64-setup.exe` and `SHA256SUMS.txt`, re-download both into a temporary folder to verify `sha256sum --check SHA256SUMS.txt`, and undraft the release (`gh release edit "v${VERSION}" --draft=false`) so it appears live in the repository's **Releases** tab.
+
+---
+
+## Releasing GloriaSetup itself
+
+Use this instead of Phases 2 and 3 when the repository is GloriaSetup. Phase 1 (show current version, ask for the new one, wait) and Phase 4 (commit and push to `main`) still apply.
+
+1. Set the new version, and only the version, in these places (all must match or GloriaSetup's release workflow refuses to publish):
+   - `Cargo.toml`: `version` under `[workspace.package]`.
+   - `npm/package.json`: `"version"`.
+   - `README.md`: the `projectGloria/GloriaSetup@v<version>` example in the GitHub Action snippet.
+   - `Cargo.lock`: run `cargo update --workspace --offline` (or `cargo check`) so the `gloria-*` entries carry the new version; the workflow builds with `--locked`. Never hand-edit other packages in the lockfile.
+2. Do not touch `.github/workflows/release.yml`, `action.yml`, or anything else. GloriaSetup's own workflow builds `gloria-pack.exe` and `gloria-stub.exe`, publishes the `v<version>` GitHub Release, then publishes `gloria-setup@<version>` to npm.
+3. Commit with a plain sentence such as `Bump GloriaSetup to <new_version> for release.` and push to `origin main`.
+4. Tell the user the release is building, and that apps released in the next ~15 minutes (before npm shows `<new_version>`) will still use the previous GloriaSetup.
 
 ---
 
