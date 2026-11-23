@@ -11,7 +11,7 @@ Cut a new release in a single prompt turn: show the current version and ask for 
 1. **Two-turn interactive contract:**
    - **Turn 1 (Prompt):** Inspect the repository's version manifests (`gloria.toml`, `package.json`, `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `tauri.conf.json`, `pyproject.toml`, `pubspec.yaml`), tell the user the current version, and ask for the new version number. Do not modify files, commit, or push before the user provides the version. (If the user already supplied the exact target version in their command, proceed directly to Turn 2.)
    - **Turn 2 (Execute):** Once the user gives the new version number, do everything end-to-end without asking for intermediate confirmation: bump all manifests, create/update `gloria.toml` and `.github/workflows/release.yml`, verify local checks, commit on `main`, and push to `origin main`.
-2. **GloriaSetup only:** Package Windows installers exclusively with **GloriaSetup** (`gloria.toml` + the `gloria-setup` npm package / `gloria-pack`). Never use Inno Setup, NSIS, WiX, or default framework bundlers.
+2. **GloriaSetup only, always the newest:** Package Windows installers exclusively with **GloriaSetup** (`gloria.toml` + the `gloria-setup` npm package / `gloria-pack`). Never use Inno Setup, NSIS, WiX, or default framework bundlers. Never take the GloriaSetup version from memory, from this skill, from `.brain/` rules or from the repo's existing workflow: look up the newest published version at release time (`npm view gloria-setup version`) and pin exactly that number. If the lookup fails, stop and tell the user instead of falling back to an older version.
 3. **Source truth only:** Never guess executable names, build scripts, icon paths, or staging directories. Inspect the repo's actual manifests and scripts before writing `gloria.toml` or `.github/workflows/release.yml`.
 4. **Main branch push trigger (no manual git tags):** Always work directly on `main`. Never create branches or run `git tag` manually—pushing the version-bumped commit to `origin main` triggers `.github/workflows/release.yml`, which builds the installer and publishes the `v<version>` release to GitHub Releases.
 5. **Path privacy:** Always use `C:\Users\you` in any comments, docs, or examples—never hardcode the local machine's real username.
@@ -30,12 +30,14 @@ Execute in strict order inside the repository root.
    - `tauri.conf.json` / `src-tauri/tauri.conf.json` (`"version": "..."`)
    - `pyproject.toml` (`version = "..."`)
    - `pubspec.yaml` (`version: ...`)
-2. Also check whether `gloria.toml` and `.github/workflows/release.yml` exist and whether the latest git tag/release (`git tag --sort=-v:refname | head -n 5` or `gh release list --limit 3`) matches.
-3. Output a short prompt telling the user the current version and asking for the new one:
+2. Resolve the newest GloriaSetup: run `npm view gloria-setup version` and keep the result as `<gloria_version>`. If the repo's `release.yml` already pins `gloria-setup@<x>`, note whether `<x>` is older.
+3. Also check whether `gloria.toml` and `.github/workflows/release.yml` exist and whether the latest git tag/release (`git tag --sort=-v:refname | head -n 5` or `gh release list --limit 3`) matches.
+4. Output a short prompt telling the user the current version and asking for the new one:
    - **Current Version:** `<current-version>` (note any mismatch across manifests if found)
    - **Release Setup:** `<gloria.toml + .github/workflows/release.yml status: ready / will be created / will be updated to GloriaSetup>`
+   - **GloriaSetup:** `<gloria_version>` (newest on npm; mention the old pin if it will be upgraded)
    - Ask: `What is the new version number you want to release? (e.g., <suggested-next-version>)`
-4. **Stop and wait** for the user's reply.
+5. **Stop and wait** for the user's reply.
 
 ---
 
@@ -83,9 +85,9 @@ Inspect `.github/workflows/release.yml`. Create it if missing, or update it if i
      - **Rust / Tauri:** `cargo build --release --locked` (stage the release binary and required runtime assets into a clean staging directory).
      - **Python:** Build standalone directory payload via PyInstaller (`--onedir --noconsole`) into `dist/<AppName>`.
      - **Flutter:** `flutter build windows --release` (`build/windows/x64/runner/Release`).
-   - Pack the installer with the pinned `gloria-setup` npm package:
+   - Pack the installer with the `gloria-setup` npm package pinned to `<gloria_version>` from Phase 1 (replace any older `gloria-setup@...` pin in the workflow; never write `@latest`):
      ```powershell
-     npx --yes gloria-setup@0.2.0 --app <staged-app-dir> --manifest gloria.toml --version ${{ needs.version.outputs.version }} --out dist
+     npx --yes gloria-setup@<gloria_version> --app <staged-app-dir> --manifest gloria.toml --version ${{ needs.version.outputs.version }} --out dist
      ```
      *(Omit `--stub`, as `gloria-setup` bundles `gloria-stub.exe` alongside `gloria-pack.exe`.)*
    - Verify the built installer (`dist\<Name>_<version>_x64-setup.exe`) with a silent dry-run in PowerShell:
@@ -119,5 +121,6 @@ Inspect `.github/workflows/release.yml`. Create it if missing, or update it if i
    ```
 5. Report concisely to the user:
    - Previous version -> new version (`<old>` -> `<new_version>`).
+   - GloriaSetup version used (`<gloria_version>`), and the old pin if it was upgraded.
    - Files updated/created (manifests, `gloria.toml`, `.github/workflows/release.yml`).
    - Confirmation that the commit was pushed to `origin main` and the GitHub Actions release workflow is now building `<Name>_<new_version>_x64-setup.exe` for the **Releases** tab.
