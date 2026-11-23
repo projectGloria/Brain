@@ -13,7 +13,7 @@ Personal AI coding-agent rule compiler, multi-tool skill generator, and SHA-256 
 ## Architecture
 - `install-brain.bat` — Hybrid batch/PowerShell CLI (`# --- POWERSHELL_START ---` payload) that compiles `brain/init.md` into the 3 tool `monjita-init-brain/SKILL.md` files, mirrors `brain/*.md` to `%USERPROFILE%\.brain\`, installs all skills under `skills/<tool>/*`, and computes/verifies the 12-char `brain-sync` SHA-256 fingerprint.
 - `brain/` — Canonical source of truth for personal rules (`workflow.md`, `commit-and-push.md`, `ui-preferences.md`, `building-the-project.md`, `github-actions.md`) and the tool-agnostic `init.md` prompt. Edit rules and the `monjita-init-brain` prompt here, never only in `skills/`.
-- `skills/` — Per-tool skill directories for `claude-code/`, `codex/`, and `antigravity/` containing `monjita-init-brain/` (generated from `brain/init.md`), `monjita-github-repo-about/`, and `monjita-github-repo-readme/`.
+- `skills/` — Per-tool skill directories for `claude-code/`, `codex/`, and `antigravity/` containing `monjita-init-brain/` (generated from `brain/init.md`), `monjita-github-release/`, `monjita-github-repo-about/`, and `monjita-github-repo-readme/`.
 
 ## Personal Rules (Brain)
 - **Git Branching:** Never create new branches or git worktrees. Always work directly on `main` until explicitly told otherwise.
@@ -31,4 +31,4 @@ Personal AI coding-agent rule compiler, multi-tool skill generator, and SHA-256 
 ## Done Criteria
 Run `.\install-brain.bat` after editing `brain/` or `install-brain.bat` to regenerate `skills/*/monjita-init-brain/SKILL.md`, install all skills, and update `%USERPROFILE%\.brain\`, then run `.\install-brain.bat check .` to verify `AGENTS.md` matches the master fingerprint and stays within 120 lines.
 
-<!-- brain-sync: 8d80a5ed2479 -->
+<!-- brain-sync: 5f20fae6c0e6 -->

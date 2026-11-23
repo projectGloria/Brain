@@ -28,7 +28,7 @@ Personal AI coding-agent rule compiler, multi-tool skill sync, and SHA-256 drift
 ## Features
 
 - **Single-source skill compilation** — `install-brain.bat` compiles `brain/init.md` into `skills/claude-code/`, `skills/codex/`, and `skills/antigravity/` (`monjita-init-brain/SKILL.md`), injecting tool-specific frontmatter and `$ARGUMENTS` syntax for Claude Code so the three tool copies stay in sync.
-- **Multi-tool skill installation** — Installs `monjita-init-brain`, `monjita-github-repo-about`, and `monjita-github-repo-readme` directly into `C:\Users\you\.claude\skills\`, `C:\Users\you\.agents\skills\`, and `C:\Users\you\.gemini\config\skills\`, and removes legacy `init-brain` folders automatically.
+- **Multi-tool skill installation** — Installs `monjita-init-brain`, `monjita-github-release`, `monjita-github-repo-about`, and `monjita-github-repo-readme` directly into `C:\Users\you\.claude\skills\`, `C:\Users\you\.agents\skills\`, and `C:\Users\you\.gemini\config\skills\`, and removes legacy `init-brain` folders automatically.
 - **Deterministic SHA-256 drift checking** — Normalizes rule files to LF, strips trailing newlines, and computes a 12-character hex digest (`<!-- brain-sync: <hash> -->`) verified by `check` and `check-all` alongside a 120-line budget check and manifest/workflow mtime drift detection.
 - **Managed mirror with ghost pruning** — Syncing `~/.brain/` into `<project>/.brain/` overwrites stale rules, removes deleted master files, preserves untracked `local-*.md` project playbooks, and hides `.brain/` via `.git/info/exclude` instead of modifying `.gitignore`.
 - **Trait-filtered rule compilation** — Supports `inline` rules (compiled into `## Personal Rules (Brain)`) and `reference` playbooks (one-line triggers under `## Playbooks (Read Before Task)`), with YAML `apply_when` traits and per-bullet `[trait]` tags.
@@ -132,7 +132,7 @@ Syncing `<project>/.brain/` mirrors `~/.brain/` and removes files no longer pres
 
 - `install-brain.bat` — Hybrid batch/PowerShell CLI (`# --- POWERSHELL_START ---` payload) for installation, skill compilation, syncing, and drift checks.
 - `brain/` — Canonical master rules (`workflow.md`, `commit-and-push.md`, `ui-preferences.md`, `building-the-project.md`, `github-actions.md`) and the tool-agnostic `init.md` prompt.
-- `skills/` — Per-tool skill folders for `claude-code/`, `codex/`, and `antigravity/` (`monjita-init-brain`, `monjita-github-repo-about`, `monjita-github-repo-readme`).
+- `skills/` — Per-tool skill folders for `claude-code/`, `codex/`, and `antigravity/` (`monjita-init-brain`, `monjita-github-release`, `monjita-github-repo-about`, `monjita-github-repo-readme`).
 
 ## Troubleshooting
 
