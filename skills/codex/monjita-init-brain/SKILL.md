@@ -74,7 +74,7 @@ Execute in strict order from the repository root. **Phases 0–4 are strictly re
    - `Human-Active` — Manual guardrail under `## Repo Guardrails & Gotchas` (or legacy `## Hard Rules & Gotchas` / pointer files) still valid.
    - `Human-Stale` — Manual guardrail referencing a missing file/tool (route to `Confirm to Prune`).
    - `Bloat` — Generic LLM advice, marketing prose, or redundant listings.
-5. **Build, Test, Lint & Version Truth (skip if `Bootstrap`):** Inspect root and sub-app manifests up to 2 levels deep (`package.json`, `pyproject.toml`, `Cargo.toml`, `src-tauri/Cargo.toml`, `tauri.conf.json`, `gloria.toml`, `go.mod`, `*.csproj`, `Makefile`, `justfile`, `docker-compose.yml`, `.env.example`) plus `.github/workflows/*.yml`. Identify the exact version file(s) so version-bump rules target every version manifest in lockstep.
+5. **Build, Test, Lint & Version Truth (skip if `Bootstrap`):** Inspect root and sub-app manifests up to 2 levels deep (`package.json`, `pyproject.toml`, `Cargo.toml`, `src-tauri/Cargo.toml`, `tauri.conf.json`, `gloria.toml`, `go.mod`, `*.csproj`, `Makefile`, `justfile`, `docker-compose.yml`, `.env.example`) plus `.github/workflows/*.yml`. Identify the exact version file(s) so `/monjita-github-release` can set the release version in every version manifest at once.
 6. **Architecture & Git History (skip if `Bootstrap`):** Map main entry points, core logic folders, IPC/API bridges, subprocess wrappers, and config loaders in 4–8 bullets max. If `.git/` exists, check `git branch --show-current` and run `git log -n 25 --oneline` for recurring fixes, platform quirks (Windows paths, UTF-8, threading, process cleanup), and recent refactors.
 
 ---
@@ -124,7 +124,7 @@ Include only sections and sub-bullets with verified signal (omit empty sections;
 - **<Topic>:** <Repo-specific human guardrail, forbidden pattern, or preserved platform quirk.>
 
 ## Done Criteria
-<Exact commands and checks to run before reporting complete, plus required version-bump verification across all Version Manifests.>
+<Exact commands and checks to run before reporting complete, plus a check that all Version Manifests agree.>
 
 <!-- brain-sync: <12-char fingerprint from Phase 0> -->
 ```
