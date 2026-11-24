@@ -92,7 +92,7 @@ export function SplashScreen({
       {/* Decorative corner HUD telemetry */}
       <div className="splash-hud-corner top-left">
         <span className="hud-tag">SYS::NODE_01</span>
-        <span className="hud-sub">PROJECT GLORIA // BRAIN OS v0.1.0</span>
+        <span className="hud-sub">PROJECT GLORIA // BRAIN OS v0.2.0</span>
       </div>
       <div className="splash-hud-corner top-right">
         <span className="hud-tag secondary">

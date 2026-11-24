@@ -79,7 +79,7 @@ export function TitleBar({
             MONJITA <span className="titlebar-slash">//</span> BRAIN
           </span>
           <span className="titlebar-version" data-tauri-drag-region>
-            v0.1.0
+            v0.2.0
           </span>
         </div>
         <div className="telemetry-bars" aria-hidden="true" data-tauri-drag-region>
