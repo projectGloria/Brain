@@ -300,7 +300,7 @@ export function RuleEditorView({
                 <div className="list-card-sub">
                   <span>{r.line_count} lines</span>
                   {r.stubs.length > 0 && (
-                    <span style={{ color: "#fbbf24" }}>
+                    <span style={{ color: "#ffffff" }}>
                       • {r.stubs.length} stub{r.stubs.length > 1 ? "s" : ""}
                     </span>
                   )}
@@ -315,6 +315,7 @@ export function RuleEditorView({
         <div className="editor-pane">
           <div className="editor-header">
             <div style={{ minWidth: 0 }}>
+              <div className="page-eyebrow">COMPILER DECK // RULE MATRIX</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700 }}>
                   brain/{doc.name}

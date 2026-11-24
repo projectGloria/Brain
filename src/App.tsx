@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { CyberspaceBg } from "./components/CyberspaceBg";
 import { Sidebar } from "./components/Sidebar";
+import { SplashScreen } from "./components/SplashScreen";
 import { TitleBar } from "./components/TitleBar";
 import { ToastHost } from "./components/ToastHost";
 import type {
@@ -18,6 +20,7 @@ import { SettingsView } from "./views/SettingsView";
 import { SkillManagerView } from "./views/SkillManagerView";
 
 export function App() {
+  const [showSplash, setShowSplash] = useState(true);
   const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
   const [appState, setAppState] = useState<AppStateSnapshot | null>(null);
   const [repos, setRepos] = useState<RepoStatus[]>([]);
@@ -34,11 +37,7 @@ export function App() {
   const toastIdRef = useRef(1);
 
   const pushToast = useCallback(
-    (
-      tone: ToastItem["tone"],
-      title: string,
-      detail?: string
-    ) => {
+    (tone: ToastItem["tone"], title: string, detail?: string) => {
       const id = toastIdRef.current++;
       setToasts((prev) => [...prev.slice(-3), { id, tone, title, detail }]);
       window.setTimeout(() => {
@@ -206,7 +205,7 @@ export function App() {
       pushToast(
         "success",
         `Saved ${tool}/${skillName}/SKILL.md`,
-        "Run Compile & Install to deploy to your tool folder."
+        "Run Compile & Deploy to push to your tool folder."
       );
     } catch (err) {
       pushToast("error", "Failed to save skill", String(err));
@@ -236,84 +235,99 @@ export function App() {
   );
 
   return (
-    <div className="app-shell">
-      <TitleBar
-        fingerprint={appState?.master_fingerprint ?? "............"}
-        masterInSync={appState?.master_in_sync_with_repo ?? true}
-        installing={installing}
-        onInstallAll={handleInstallAll}
-        onCopyFingerprint={handleCopyFingerprint}
-      />
+    <>
+      <CyberspaceBg />
 
-      <div className="workspace-body">
-        <Sidebar
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
-          driftCount={driftCount}
+      {showSplash && (
+        <SplashScreen
+          fingerprint={appState?.master_fingerprint ?? "............"}
           ruleCount={rules.length}
-          stubCount={appState?.stub_files.length ?? 0}
-          masterFingerprint={appState?.master_fingerprint ?? "............"}
+          repoCount={repos.length}
+          onComplete={() => setShowSplash(false)}
+        />
+      )}
+
+      <div className="app-shell">
+        <TitleBar
+          fingerprint={appState?.master_fingerprint ?? "............"}
           masterInSync={appState?.master_in_sync_with_repo ?? true}
-          legacySkillPresent={appState?.legacy_skill_present ?? false}
-          onRemoveLegacy={handleRemoveLegacy}
+          installing={installing}
+          onInstallAll={handleInstallAll}
+          onCopyFingerprint={handleCopyFingerprint}
+          onReplaySplash={() => setShowSplash(true)}
         />
 
-        <main className="main-pane">
-          {activeTab === "dashboard" && (
-            <DashboardView
-              repos={repos}
-              loading={scanningRepos}
-              syncingRepo={syncingRepo}
-              syncingAll={syncingAll}
-              onRescan={refreshRepos}
-              onRecheck={handleRecheckRepo}
-              onSyncRepo={handleSyncRepo}
-              onSyncAllDrifted={handleSyncAllDrifted}
-              onOpenFolder={handleOpenFolder}
-            />
-          )}
+        <div className="workspace-body">
+          <Sidebar
+            activeTab={activeTab}
+            onSelectTab={setActiveTab}
+            driftCount={driftCount}
+            ruleCount={rules.length}
+            stubCount={appState?.stub_files.length ?? 0}
+            masterFingerprint={appState?.master_fingerprint ?? "............"}
+            masterInSync={appState?.master_in_sync_with_repo ?? true}
+            installing={installing}
+            legacySkillPresent={appState?.legacy_skill_present ?? false}
+            onRemoveLegacy={handleRemoveLegacy}
+          />
 
-          {activeTab === "rules" && (
-            <RuleEditorView
-              rules={rules}
-              selectedRuleName={selectedRuleName}
-              onSelectRule={setSelectedRuleName}
-              onRulesChanged={async () => {
-                await Promise.all([refreshRules(), refreshState()]);
-              }}
-              onInstallAll={handleInstallAll}
-              onToast={pushToast}
-            />
-          )}
+          <main className="main-pane">
+            {activeTab === "dashboard" && (
+              <DashboardView
+                repos={repos}
+                loading={scanningRepos}
+                syncingRepo={syncingRepo}
+                syncingAll={syncingAll}
+                onRescan={refreshRepos}
+                onRecheck={handleRecheckRepo}
+                onSyncRepo={handleSyncRepo}
+                onSyncAllDrifted={handleSyncAllDrifted}
+                onOpenFolder={handleOpenFolder}
+              />
+            )}
 
-          {activeTab === "skills" && (
-            <SkillManagerView
-              skills={skills}
-              installing={installing}
-              legacySkillPresent={appState?.legacy_skill_present ?? false}
-              onInstallAll={handleInstallAll}
-              onRemoveLegacy={handleRemoveLegacy}
-              onSaveSkill={handleSaveSkill}
-              onJumpToInitRule={() => {
-                setSelectedRuleName("init.md");
-                setActiveTab("rules");
-              }}
-            />
-          )}
+            {activeTab === "rules" && (
+              <RuleEditorView
+                rules={rules}
+                selectedRuleName={selectedRuleName}
+                onSelectRule={setSelectedRuleName}
+                onRulesChanged={async () => {
+                  await Promise.all([refreshRules(), refreshState()]);
+                }}
+                onInstallAll={handleInstallAll}
+                onToast={pushToast}
+              />
+            )}
 
-          {activeTab === "settings" && appState && (
-            <SettingsView
-              appState={appState}
-              onSaveConfig={handleSaveConfig}
-              onRemoveLegacy={handleRemoveLegacy}
-              onOpenFolder={handleOpenFolder}
-            />
-          )}
-        </main>
+            {activeTab === "skills" && (
+              <SkillManagerView
+                skills={skills}
+                installing={installing}
+                legacySkillPresent={appState?.legacy_skill_present ?? false}
+                onInstallAll={handleInstallAll}
+                onRemoveLegacy={handleRemoveLegacy}
+                onSaveSkill={handleSaveSkill}
+                onJumpToInitRule={() => {
+                  setSelectedRuleName("init.md");
+                  setActiveTab("rules");
+                }}
+              />
+            )}
+
+            {activeTab === "settings" && appState && (
+              <SettingsView
+                appState={appState}
+                onSaveConfig={handleSaveConfig}
+                onRemoveLegacy={handleRemoveLegacy}
+                onOpenFolder={handleOpenFolder}
+              />
+            )}
+          </main>
+        </div>
+
+        <ToastHost toasts={toasts} onDismiss={dismissToast} />
       </div>
-
-      <ToastHost toasts={toasts} onDismiss={dismissToast} />
-    </div>
+    </>
   );
 }
 

@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Copy, Hammer, Minus, Square, CopyCheck, X } from "lucide-react";
+import {
+  Copy,
+  CopyCheck,
+  Hammer,
+  Minus,
+  Sparkles,
+  Square,
+  X,
+} from "lucide-react";
 import monjitaIcon from "../assets/monjita.png";
 
 interface TitleBarProps {
@@ -9,6 +17,7 @@ interface TitleBarProps {
   installing: boolean;
   onInstallAll: () => void;
   onCopyFingerprint: () => void;
+  onReplaySplash: () => void;
 }
 
 export function TitleBar({
@@ -17,6 +26,7 @@ export function TitleBar({
   installing,
   onInstallAll,
   onCopyFingerprint,
+  onReplaySplash,
 }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -61,13 +71,23 @@ export function TitleBar({
         data-tauri-drag-region
         onDoubleClick={handleToggleMax}
       >
-        <img src={monjitaIcon} alt="Brain" className="titlebar-icon" />
-        <span className="titlebar-title" data-tauri-drag-region>
-          Brain
-        </span>
-        <span className="titlebar-version" data-tauri-drag-region>
-          v0.1.0
-        </span>
+        <div className="titlebar-avatar-wrap" data-tauri-drag-region>
+          <img src={monjitaIcon} alt="Monjita" className="titlebar-icon" />
+        </div>
+        <div className="titlebar-brand" data-tauri-drag-region>
+          <span className="titlebar-title" data-tauri-drag-region>
+            MONJITA <span className="titlebar-slash">//</span> BRAIN
+          </span>
+          <span className="titlebar-version" data-tauri-drag-region>
+            v0.1.0
+          </span>
+        </div>
+        <div className="telemetry-bars" aria-hidden="true" data-tauri-drag-region>
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
       </div>
 
       <div
@@ -84,8 +104,18 @@ export function TitleBar({
           title="Copy <!-- brain-sync: ... --> marker"
         >
           <span className={`fp-dot ${masterInSync ? "" : "stale"}`} />
-          <span>{fingerprint}</span>
+          <span>HASH::{fingerprint}</span>
           {masterInSync ? <Copy size={11} /> : <CopyCheck size={11} />}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={onReplaySplash}
+          title="Replay Monjita Holographic Boot Splash"
+          aria-label="Replay Boot Splash"
+        >
+          <Sparkles size={13} style={{ color: "#ffffff" }} />
         </button>
 
         <button
@@ -96,7 +126,7 @@ export function TitleBar({
           title="Compile init.md, mirror ~/.brain, and install 3 tool skills"
         >
           <Hammer size={13} className={installing ? "spin" : ""} />
-          <span>{installing ? "Installing..." : "Compile & Install"}</span>
+          <span>{installing ? "Deploying..." : "Compile & Deploy"}</span>
         </button>
 
         <div className="win-controls">

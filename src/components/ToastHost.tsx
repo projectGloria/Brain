@@ -22,13 +22,7 @@ export function ToastHost({ toasts, onDismiss }: ToastHostProps) {
             : Info;
 
         const iconColor =
-          t.tone === "success"
-            ? "var(--green)"
-            : t.tone === "warning"
-            ? "var(--amber)"
-            : t.tone === "error"
-            ? "var(--red)"
-            : "var(--accent)";
+          t.tone === "warning" ? "#d4d4d8" : "#ffffff";
 
         return (
           <div

@@ -80,6 +80,8 @@ export function SkillManagerView({
         style={{
           padding: "14px 20px",
           borderBottom: "1px solid var(--border)",
+          background: "rgba(8, 8, 8, 0.84)",
+          backdropFilter: "blur(12px)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -88,6 +90,7 @@ export function SkillManagerView({
         }}
       >
         <div>
+          <div className="page-eyebrow">AGENT UPLINKS // SKILL DISPATCH</div>
           <h1 className="page-title" style={{ fontSize: 16 }}>
             Multi-Tool Skill Manager
           </h1>

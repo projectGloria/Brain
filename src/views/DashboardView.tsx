@@ -104,6 +104,7 @@ export function DashboardView({
     <div className="view-scroll">
       <div className="page-header">
         <div>
+          <div className="page-eyebrow">NEURAL MATRIX // DRIFT TELEMETRY</div>
           <h1 className="page-title">Repository Drift Monitor</h1>
           <p className="page-subtitle">
             Track SHA-256 brain fingerprints, 120-line AGENTS.md budgets, and
@@ -211,7 +212,7 @@ export function DashboardView({
         </div>
       ) : (
         <div className="repo-list">
-          {filteredRepos.map((repo) => {
+          {filteredRepos.map((repo, idx) => {
             const pct =
               repo.lines_count !== null
                 ? Math.min(100, Math.round((repo.lines_count / 120) * 100))
@@ -229,9 +230,14 @@ export function DashboardView({
               repo.sync_marker !== "none" &&
               repo.sync_marker !== repo.expected;
             const isSyncing = syncingRepo === repo.repo_path;
+            const tone = badgeClass(repo.status);
 
             return (
-              <div key={repo.repo_path} className="repo-card">
+              <div
+                key={repo.repo_path}
+                className={`repo-card status-${tone}`}
+                style={{ animationDelay: `${Math.min(idx * 25, 220)}ms` }}
+              >
                 <div className="repo-identity">
                   <div className="repo-name-row">
                     <span className="repo-name">{repo.repo}</span>
@@ -263,14 +269,7 @@ export function DashboardView({
                     repo.local_playbooks.length > 0) && (
                     <div className="repo-meta-tags">
                       {repo.drifted_files.map((df) => (
-                        <span
-                          key={df}
-                          className="mini-tag"
-                          style={{
-                            borderColor: "rgba(245, 158, 11, 0.35)",
-                            color: "#fbbf24",
-                          }}
-                        >
+                        <span key={df} className="mini-tag drift-file">
                           changed: {df}
                         </span>
                       ))}

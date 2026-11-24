@@ -78,6 +78,7 @@ export function SettingsView({
     <div className="view-scroll">
       <div className="page-header">
         <div>
+          <div className="page-eyebrow">CORE SYSTEM // PATH TOPOLOGY</div>
           <h1 className="page-title">Settings &amp; Paths</h1>
           <p className="page-subtitle">
             Configure the Brain source repository, workspace scan roots, and tool targets.
