@@ -1,0 +1,9 @@
+id = "Brain"
+name = "Brain"
+version = "0.1.0"
+main_exe = "Brain.exe"
+icon = "Monjita.ico"
+accent = "#FF6B00"
+description = "Personal AI coding-agent rule compiler, multi-tool skill sync, and SHA-256 drift monitor"
+needs_webview2 = true
+data_folders = ['%APPDATA%\Brain', '%LOCALAPPDATA%\com.projectgloria.brain']
