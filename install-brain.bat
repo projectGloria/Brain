@@ -76,12 +76,14 @@ function Sync-SkillFilesFromInit([string]$RepoRoot) {
     if ($pos -lt 0) { throw "Could not find '$marker' in $initPath" }
     $body = $raw.Substring($pos)
 
+    $g = [char]0xE800
+
     $stdHeader = @"
 ---
 name: gloria-init-brain
-description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run gloria-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.
+description: $g Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run gloria-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.
 ---
-# gloria-init-brain — Project Context & Brain Compiler
+# $g gloria-init-brain — Project Context & Brain Compiler
 
 Generate, bootstrap, refresh, or update ``AGENTS.md`` by combining **repository ground truth** with matching personal rules from ``.brain/*.md``, enforcing a strict 120-line budget and aggressive pruning on every run.
 
@@ -92,11 +94,11 @@ User arguments: any text the user typed when invoking this skill (e.g. ``check``
     $claudeHeader = @"
 ---
 name: gloria-init-brain
-description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for gloria-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.
+description: $g Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for gloria-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.
 argument-hint: "[check] | [learn <rule>] | [short project description for bootstrap]"
 disable-model-invocation: true
 ---
-# /gloria-init-brain — Project Context & Brain Compiler
+# $g /gloria-init-brain — Project Context & Brain Compiler
 
 Generate, bootstrap, refresh, or update ``AGENTS.md`` by combining **repository ground truth** with matching personal rules from ``.brain/*.md``, enforcing a strict 120-line budget and aggressive pruning on every run.
 

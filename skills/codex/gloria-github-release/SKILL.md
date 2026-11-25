@@ -1,9 +1,9 @@
 ---
 name: gloria-github-release
-description: Releases the current projectGloria repo end to end - shows the current version and asks for the new one, bumps every version file, validates gloria.toml locally, makes sure .github/workflows/release.yml is the shared GloriaSetup template, commits and pushes to main, starts the release workflow, watches it, fixes and retries failures, and reports only when the GitHub Release is live. Trigger when the user invokes gloria-github-release or asks to cut/publish a new release.
+description:  Releases the current projectGloria repo end to end - shows the current version and asks for the new one, bumps every version file, validates gloria.toml locally, makes sure .github/workflows/release.yml is the shared GloriaSetup template, commits and pushes to main, starts the release workflow, watches it, fixes and retries failures, and reports only when the GitHub Release is live. Trigger when the user invokes gloria-github-release or asks to cut/publish a new release.
 ---
 
-# Release a projectGloria repo (`gloria-github-release`)
+#  Release a projectGloria repo (`gloria-github-release`)
 
 The user changed something (anything, even one string) and wants it released so GloriaLauncher can install or update it. Running this skill **is** the user's explicit request to commit, push, and release; no other confirmation is needed after they give the version.
 

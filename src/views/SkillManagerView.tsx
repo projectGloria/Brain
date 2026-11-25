@@ -189,7 +189,14 @@ export function SkillManagerView({
                   onClick={() => selectSkill(key)}
                 >
                   <div className="list-card-top">
-                    <span className="list-card-name">{skill.skill_name}</span>
+                    <span className="list-card-name">
+                      {skill.skill_name.startsWith("gloria-") && (
+                        <span style={{ fontFamily: "GloriaGlyph", marginRight: 6 }} aria-hidden="true">
+                          {"\uE800"}
+                        </span>
+                      )}
+                      {skill.skill_name}
+                    </span>
                     <span
                       className={`status-badge ${statusTone(skill.status)}`}
                       style={{ fontSize: 10, padding: "1px 6px" }}
@@ -215,7 +222,13 @@ export function SkillManagerView({
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700 }}>
-                    {activeSkill.tool_label} / {activeSkill.skill_name}
+                    {activeSkill.tool_label} /{" "}
+                    {activeSkill.skill_name.startsWith("gloria-") && (
+                      <span style={{ fontFamily: "GloriaGlyph", marginRight: 6 }} aria-hidden="true">
+                        {"\uE800"}
+                      </span>
+                    )}
+                    {activeSkill.skill_name}
                   </span>
                   {activeSkill.is_generated && (
                     <span className="mini-tag accent">

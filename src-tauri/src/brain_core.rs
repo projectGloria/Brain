@@ -666,9 +666,9 @@ pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
     let std_header = concat!(
         "---\n",
         "name: gloria-init-brain\n",
-        "description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run gloria-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.\n",
+        "description: \u{E800} Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run gloria-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.\n",
         "---\n",
-        "# gloria-init-brain — Project Context & Brain Compiler\n\n",
+        "# \u{E800} gloria-init-brain — Project Context & Brain Compiler\n\n",
         "Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.\n\n",
         "User arguments: any text the user typed when invoking this skill (e.g. `check`, `learn <rule>`, or a short project description such as \"Tauri desktop app for X\").\n",
     );
@@ -676,11 +676,11 @@ pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
     let claude_header = concat!(
         "---\n",
         "name: gloria-init-brain\n",
-        "description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for gloria-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.\n",
+        "description: \u{E800} Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for gloria-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.\n",
         "argument-hint: \"[check] | [learn <rule>] | [short project description for bootstrap]\"\n",
         "disable-model-invocation: true\n",
         "---\n",
-        "# /gloria-init-brain — Project Context & Brain Compiler\n\n",
+        "# \u{E800} /gloria-init-brain — Project Context & Brain Compiler\n\n",
         "Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.\n\n",
         "User arguments: `$ARGUMENTS`\n",
     );

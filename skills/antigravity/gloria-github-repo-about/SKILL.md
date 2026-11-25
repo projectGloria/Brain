@@ -1,9 +1,9 @@
 ---
 name: gloria-github-repo-about
-description: Inspects the current local repository to draft and apply the GitHub About description and topics/tags via the GitHub CLI (gh). Trigger when the user asks to write, update, or generate the GitHub About section, description, or topics/tags.
+description:  Inspects the current local repository to draft and apply the GitHub About description and topics/tags via the GitHub CLI (gh). Trigger when the user asks to write, update, or generate the GitHub About section, description, or topics/tags.
 ---
 
-# GitHub Repo About & Topics
+#  GitHub Repo About & Topics
 
 Draft and apply the GitHub repository description and topics directly from the current working directory.
 
