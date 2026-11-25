@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::config::legacy_skill_dir;
+use crate::config::{legacy_skill_dir, legacy_skill_dirs};
 
 #[derive(Debug, Clone)]
 pub struct BrainFileEntry {
@@ -30,6 +30,53 @@ pub struct RepoStatus {
     pub local_playbooks: Vec<String>,
     pub is_git_repo: bool,
     pub is_brain_repo: bool,
+    /// True when `<repo>/.brain/` holds an identical copy of every master rule and no stale ones.
+    pub project_brain_in_sync: bool,
+    /// MISSING / MATCHES / DIFFERS / NO TEMPLATE against the shared .gitignore draft.
+    pub gitignore_status: String,
+}
+
+/// Master brain state computed once per scan and shared by every `check_repo` call.
+pub struct ScanContext {
+    pub src_dir: PathBuf,
+    /// (lowercase name, normalized content) for each master rule, init excluded.
+    pub master_files: Vec<(String, String)>,
+    pub brain_repo: Option<PathBuf>,
+    pub gitignore_template: Option<String>,
+}
+
+impl ScanContext {
+    pub fn new(
+        master_dir: &Path,
+        fallback_brain_dir: Option<&Path>,
+        brain_repo: Option<&Path>,
+        gitignore_template: Option<String>,
+    ) -> Self {
+        let src_dir = resolve_source_dir(master_dir, fallback_brain_dir);
+        let master_files = get_brain_files(&src_dir, None)
+            .into_iter()
+            .map(|f| {
+                let content = read_utf8(&f.path).map(|c| normalize_text(&c)).unwrap_or_default();
+                (f.name.to_ascii_lowercase(), content)
+            })
+            .collect();
+        Self {
+            src_dir,
+            master_files,
+            brain_repo: brain_repo.map(Path::to_path_buf),
+            gitignore_template,
+        }
+    }
+}
+
+fn resolve_source_dir(master_dir: &Path, fallback_brain_dir: Option<&Path>) -> PathBuf {
+    if master_dir.is_dir() {
+        master_dir.to_path_buf()
+    } else if let Some(fb) = fallback_brain_dir.filter(|p| p.is_dir()) {
+        fb.to_path_buf()
+    } else {
+        master_dir.to_path_buf()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,10 +101,38 @@ pub struct InstallResult {
     pub legacy_skill_present: bool,
 }
 
+/// Decodes bytes the way PowerShell's `ReadAllText(..., UTF8)` does: honours UTF-8 and
+/// UTF-16 BOMs and replaces invalid UTF-8 sequences with U+FFFD instead of failing.
+pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    if bytes.len() >= 2 && (bytes[..2] == [0xFF, 0xFE] || bytes[..2] == [0xFE, 0xFF]) {
+        let le = bytes[0] == 0xFF;
+        let (pairs, _) = bytes[2..].as_chunks::<2>();
+        let units: Vec<u16> = pairs
+            .iter()
+            .map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) })
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 pub fn read_utf8(path: &Path) -> Result<String, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read '{}': {e}", path.display()))?;
-    Ok(raw.strip_prefix('\u{FEFF}').unwrap_or(&raw).to_string())
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read '{}': {e}", path.display()))?;
+    Ok(decode_text(&bytes))
+}
+
+/// Strips a BOM, converts CRLF/CR to LF and trims trailing newlines — the same
+/// normalization `Get-BrainFingerprint` applies before hashing.
+pub fn normalize_text(raw: &str) -> String {
+    let stripped = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
+    stripped
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 pub fn write_utf8_no_bom(path: &Path, content: &str) -> Result<(), String> {
@@ -69,6 +144,17 @@ pub fn write_utf8_no_bom(path: &Path, content: &str) -> Result<(), String> {
     }
     fs::write(path, content.as_bytes())
         .map_err(|e| format!("Failed to write '{}': {e}", path.display()))
+}
+
+/// A single path segment made only of `[A-Za-z0-9._-]`, not starting with `.` and
+/// without `..` — rejects separators, drive prefixes (`C:`) and reserved characters.
+pub fn is_safe_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 pub fn is_init_filename(name: &str) -> bool {
@@ -144,6 +230,9 @@ pub fn compute_fingerprint_from_pairs(pairs: &[(String, String)]) -> String {
         return "000000000000".to_string();
     }
 
+    // Ordinal (byte) ordering. PowerShell 5.1's `Sort-Object` is culture-aware, so file
+    // names that differ only by `-`/`_` (e.g. `github.md` vs `github-actions.md`) could
+    // sort differently there; keep rule names distinct enough to avoid that.
     let mut sorted: BTreeMap<String, String> = BTreeMap::new();
     for (name, content) in pairs {
         if is_init_filename(name) || !name.to_ascii_lowercase().ends_with(".md") {
@@ -158,12 +247,7 @@ pub fn compute_fingerprint_from_pairs(pairs: &[(String, String)]) -> String {
 
     let mut buf = String::new();
     for (lower_name, raw) in sorted {
-        let stripped = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw);
-        let norm = stripped
-            .replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .trim_end_matches('\n')
-            .to_string();
+        let norm = normalize_text(&raw);
         buf.push_str(&lower_name);
         buf.push('\n');
         buf.push_str(&norm);
@@ -204,12 +288,49 @@ pub fn detect_stubs(content: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn check_repo(
-    repo_path: &Path,
-    master_dir: &Path,
-    fallback_brain_dir: Option<&Path>,
-    brain_repo_path: Option<&Path>,
-) -> Result<RepoStatus, String> {
+/// Reads the `.md` files of `<repo>/.brain/` as (lowercase name, normalized content).
+fn read_project_brain(proj_brain: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Ok(entries) = fs::read_dir(proj_brain) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.to_ascii_lowercase().ends_with(".md") {
+                continue;
+            }
+            let content = read_utf8(&p).map(|c| normalize_text(&c)).unwrap_or_default();
+            out.push((name.to_ascii_lowercase(), content));
+        }
+    }
+    out
+}
+
+/// True when `.brain/` holds an identical copy of every master rule and no stale
+/// non-local rule files — i.e. "Sync .brain/" would change nothing.
+pub fn project_brain_matches(master_files: &[(String, String)], project_files: &[(String, String)]) -> bool {
+    let proj: BTreeMap<&str, &str> = project_files
+        .iter()
+        .map(|(n, c)| (n.as_str(), c.as_str()))
+        .collect();
+    let master_names: BTreeSet<&str> = master_files.iter().map(|(n, _)| n.as_str()).collect();
+    let all_copied = master_files
+        .iter()
+        .all(|(n, c)| proj.get(n.as_str()).is_some_and(|pc| pc == c));
+    let no_stale = proj
+        .keys()
+        .all(|n| master_names.contains(n) || is_local_filename(n));
+    all_copied && no_stale
+}
+
+pub fn check_repo_with(repo_path: &Path, ctx: &ScanContext) -> Result<RepoStatus, String> {
+    if !repo_path.is_dir() {
+        return Err(format!("'{}' is not an existing folder.", repo_path.display()));
+    }
     let repo_name = repo_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -217,23 +338,23 @@ pub fn check_repo(
         .to_string();
     let repo_path_str = repo_path.to_string_lossy().to_string();
 
-    let src_dir = if master_dir.is_dir() {
-        master_dir.to_path_buf()
-    } else if let Some(fb) = fallback_brain_dir {
-        fb.to_path_buf()
-    } else {
-        master_dir.to_path_buf()
-    };
-
     let proj_brain = repo_path.join(".brain");
     let has_project_brain = proj_brain.is_dir();
     let has_claude_md = repo_path.join("CLAUDE.md").is_file();
     let is_git_repo = repo_path.join(".git").exists();
-    let is_brain_repo = brain_repo_path
+    let is_brain_repo = ctx
+        .brain_repo
+        .as_deref()
         .map(|br| same_path_ci(br, repo_path))
         .unwrap_or(false);
 
-    let mut local_playbooks = Vec::new();
+    let project_files = if has_project_brain {
+        read_project_brain(&proj_brain)
+    } else {
+        Vec::new()
+    };
+
+    let mut local_playbooks: Vec<String> = Vec::new();
     if has_project_brain {
         if let Ok(entries) = fs::read_dir(&proj_brain) {
             for e in entries.flatten() {
@@ -247,7 +368,27 @@ pub fn check_repo(
         local_playbooks.sort();
     }
 
-    let expected_fp = compute_brain_fingerprint(&src_dir, Some(&proj_brain))?;
+    let expected_fp = if ctx.src_dir.is_dir() {
+        let master_names: BTreeSet<&str> = ctx.master_files.iter().map(|(n, _)| n.as_str()).collect();
+        let mut pairs = ctx.master_files.clone();
+        for (name, content) in &project_files {
+            if is_local_filename(name) && !is_init_filename(name) && !master_names.contains(name.as_str()) {
+                pairs.push((name.clone(), content.clone()));
+            }
+        }
+        compute_fingerprint_from_pairs(&pairs)
+    } else {
+        compute_brain_fingerprint(&ctx.src_dir, Some(&proj_brain))?
+    };
+
+    let project_brain_in_sync = if ctx.master_files.is_empty() {
+        true
+    } else {
+        has_project_brain && project_brain_matches(&ctx.master_files, &project_files)
+    };
+    let gitignore_status =
+        crate::gitignore::quick_status(repo_path, ctx.gitignore_template.as_deref());
+
     let agents_path = repo_path.join("AGENTS.md");
 
     if !agents_path.is_file() {
@@ -266,6 +407,8 @@ pub fn check_repo(
             local_playbooks,
             is_git_repo,
             is_brain_repo,
+            project_brain_in_sync,
+            gitignore_status,
         });
     }
 
@@ -386,7 +529,35 @@ pub fn check_repo(
         local_playbooks,
         is_git_repo,
         is_brain_repo,
+        project_brain_in_sync,
+        gitignore_status,
     })
+}
+
+/// A RepoStatus row for a repo whose check failed, so one bad repo never aborts a scan.
+pub fn error_status(repo_path: &Path, error: String) -> RepoStatus {
+    RepoStatus {
+        repo: repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("repo")
+            .to_string(),
+        repo_path: repo_path.to_string_lossy().to_string(),
+        status: "ERROR".to_string(),
+        lines_count: None,
+        lines_display: "-".to_string(),
+        sync_marker: "-".to_string(),
+        expected: "-".to_string(),
+        message: error,
+        drifted_files: Vec::new(),
+        has_project_brain: false,
+        has_claude_md: false,
+        local_playbooks: Vec::new(),
+        is_git_repo: false,
+        is_brain_repo: false,
+        project_brain_in_sync: true,
+        gitignore_status: "-".to_string(),
+    }
 }
 
 pub fn sync_project(
@@ -394,6 +565,9 @@ pub fn sync_project(
     master_dir: &Path,
     fallback_brain_dir: Option<&Path>,
 ) -> Result<SyncResult, String> {
+    if !repo_path.is_dir() {
+        return Err(format!("'{}' is not an existing folder.", repo_path.display()));
+    }
     let src_dir = if master_dir.is_dir() {
         master_dir.to_path_buf()
     } else if let Some(fb) = fallback_brain_dir {
@@ -491,22 +665,22 @@ pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
 
     let std_header = concat!(
         "---\n",
-        "name: monjita-init-brain\n",
-        "description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run monjita-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.\n",
+        "name: gloria-init-brain\n",
+        "description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run gloria-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.\n",
         "---\n",
-        "# monjita-init-brain — Project Context & Brain Compiler\n\n",
+        "# gloria-init-brain — Project Context & Brain Compiler\n\n",
         "Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.\n\n",
         "User arguments: any text the user typed when invoking this skill (e.g. `check`, `learn <rule>`, or a short project description such as \"Tauri desktop app for X\").\n",
     );
 
     let claude_header = concat!(
         "---\n",
-        "name: monjita-init-brain\n",
-        "description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for monjita-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.\n",
+        "name: gloria-init-brain\n",
+        "description: Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for gloria-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.\n",
         "argument-hint: \"[check] | [learn <rule>] | [short project description for bootstrap]\"\n",
         "disable-model-invocation: true\n",
         "---\n",
-        "# /monjita-init-brain — Project Context & Brain Compiler\n\n",
+        "# /gloria-init-brain — Project Context & Brain Compiler\n\n",
         "Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.\n\n",
         "User arguments: `$ARGUMENTS`\n",
     );
@@ -520,7 +694,7 @@ pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
         &repo_root
             .join("skills")
             .join("antigravity")
-            .join("monjita-init-brain")
+            .join("gloria-init-brain")
             .join("SKILL.md"),
         &format!("{std_header}{body}"),
     )?;
@@ -528,7 +702,7 @@ pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
         &repo_root
             .join("skills")
             .join("codex")
-            .join("monjita-init-brain")
+            .join("gloria-init-brain")
             .join("SKILL.md"),
         &format!("{std_header}{body}"),
     )?;
@@ -536,7 +710,7 @@ pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
         &repo_root
             .join("skills")
             .join("claude-code")
-            .join("monjita-init-brain")
+            .join("gloria-init-brain")
             .join("SKILL.md"),
         &format!("{claude_header}{claude_body}"),
     )?;
@@ -643,9 +817,17 @@ pub fn install_brain(repo_root: Option<&Path>, master_dir: &Path) -> Result<Inst
                 continue;
             }
 
-            let old_init = dst_root.join("init-brain");
-            if old_init.exists() {
-                let _ = fs::remove_dir_all(&old_init);
+            for legacy in [
+                "init-brain",
+                "monjita-init-brain",
+                "monjita-github-release",
+                "monjita-github-repo-about",
+                "monjita-github-repo-readme",
+            ] {
+                let old_dir = dst_root.join(legacy);
+                if old_dir.exists() {
+                    let _ = fs::remove_dir_all(&old_dir);
+                }
             }
 
             if let Ok(dirs) = fs::read_dir(&src_root) {
@@ -700,20 +882,33 @@ pub fn install_brain(repo_root: Option<&Path>, master_dir: &Path) -> Result<Inst
 }
 
 pub fn remove_legacy_skill() -> Result<bool, String> {
-    let dir = legacy_skill_dir()?;
-    if dir.exists() {
-        fs::remove_dir_all(&dir)
-            .map_err(|e| format!("Failed to remove legacy skill '{}': {e}", dir.display()))?;
-        Ok(true)
+    let mut removed = false;
+    for dir in legacy_skill_dirs()? {
+        if dir.exists() {
+            fs::remove_dir_all(&dir)
+                .map_err(|e| format!("Failed to remove legacy skill '{}': {e}", dir.display()))?;
+            removed = true;
+        }
+    }
+    Ok(removed)
+}
+
+/// Comparable form of a path: `/` becomes `\`, existing paths are canonicalized
+/// (without the `\\?\` prefix) and trailing separators are trimmed.
+pub fn normalize_path(p: &Path) -> String {
+    let base = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = base.to_string_lossy().replace('/', "\\");
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    let trimmed = s.trim_end_matches('\\');
+    if trimmed.ends_with(':') {
+        format!("{trimmed}\\")
     } else {
-        Ok(false)
+        trimmed.to_string()
     }
 }
 
-fn same_path_ci(a: &Path, b: &Path) -> bool {
-    let norm_a = a.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
-    let norm_b = b.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
-    norm_a == norm_b
+pub fn same_path_ci(a: &Path, b: &Path) -> bool {
+    normalize_path(a).to_lowercase() == normalize_path(b).to_lowercase()
 }
 
 #[cfg(test)]
@@ -772,6 +967,43 @@ mod tests {
         assert_eq!(stubs.len(), 2);
         assert!(stubs[0].contains("<fill this in>"));
         assert!(stubs[1].contains("<another stub>"));
+    }
+
+    #[test]
+    fn project_brain_in_sync_after_sync_and_detects_stale_or_changed() {
+        let root = make_temp_dir("insync");
+        let master = root.join("master");
+        let repo = root.join("repo");
+        fs::create_dir_all(&master).unwrap();
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        write_utf8_no_bom(&master.join("workflow.md"), "- stay on main\r\n").unwrap();
+        write_utf8_no_bom(&master.join("init.md"), "# ignored").unwrap();
+
+        let ctx = ScanContext::new(&master, None, None, None);
+        assert!(!check_repo_with(&repo, &ctx).unwrap().project_brain_in_sync);
+
+        sync_project(&repo, &master, None).unwrap();
+        write_utf8_no_bom(&repo.join(".brain").join("local-notes.md"), "- mine").unwrap();
+        let st = check_repo_with(&repo, &ctx).unwrap();
+        assert!(st.project_brain_in_sync);
+        assert_eq!(st.status, "NO AGENTS.MD");
+
+        write_utf8_no_bom(&repo.join(".brain").join("old-rule.md"), "- stale").unwrap();
+        assert!(!check_repo_with(&repo, &ctx).unwrap().project_brain_in_sync);
+        fs::remove_file(repo.join(".brain").join("old-rule.md")).unwrap();
+
+        write_utf8_no_bom(&repo.join(".brain").join("workflow.md"), "- edited").unwrap();
+        assert!(!check_repo_with(&repo, &ctx).unwrap().project_brain_in_sync);
+
+        assert!(sync_project(&root.join("missing"), &master, None).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn decode_text_handles_boms_and_invalid_utf8() {
+        assert_eq!(decode_text(&[0xEF, 0xBB, 0xBF, b'h', b'i']), "hi");
+        assert_eq!(decode_text(&[0xFF, 0xFE, b'h', 0, b'i', 0]), "hi");
+        assert_eq!(decode_text(&[b'a', 0xFF, b'b']), "a\u{FFFD}b");
     }
 
     #[test]

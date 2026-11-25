@@ -1,6 +1,6 @@
 # INIT.md — Project Context & Brain Compiler (tool-agnostic)
 
-> Plain-markdown copy of the `monjita-init-brain` skill. Paste it into any agent as a prompt, or point the agent at it. The agent-specific skills in `skills/` carry the same body.
+> Plain-markdown copy of the `gloria-init-brain` skill. Paste it into any agent as a prompt, or point the agent at it. The agent-specific skills in `skills/` carry the same body.
 
 Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.
 
@@ -73,7 +73,7 @@ Execute in strict order from the repository root. **Phases 0–4 are strictly re
    - `Human-Active` — Manual guardrail under `## Repo Guardrails & Gotchas` (or legacy `## Hard Rules & Gotchas` / pointer files) still valid.
    - `Human-Stale` — Manual guardrail referencing a missing file/tool (route to `Confirm to Prune`).
    - `Bloat` — Generic LLM advice, marketing prose, or redundant listings.
-5. **Build, Test, Lint & Version Truth (skip if `Bootstrap`):** Inspect root and sub-app manifests up to 2 levels deep (`package.json`, `pyproject.toml`, `Cargo.toml`, `src-tauri/Cargo.toml`, `tauri.conf.json`, `gloria.toml`, `go.mod`, `*.csproj`, `Makefile`, `justfile`, `docker-compose.yml`, `.env.example`) plus `.github/workflows/*.yml`. Identify the exact version file(s) so `/monjita-github-release` can set the release version in every version manifest at once.
+5. **Build, Test, Lint & Version Truth (skip if `Bootstrap`):** Inspect root and sub-app manifests up to 2 levels deep (`package.json`, `pyproject.toml`, `Cargo.toml`, `src-tauri/Cargo.toml`, `tauri.conf.json`, `gloria.toml`, `go.mod`, `*.csproj`, `Makefile`, `justfile`, `docker-compose.yml`, `.env.example`) plus `.github/workflows/*.yml`. Identify the exact version file(s) so `/gloria-github-release` can set the release version in every version manifest at once.
 6. **Architecture & Git History (skip if `Bootstrap`):** Map main entry points, core logic folders, IPC/API bridges, subprocess wrappers, and config loaders in 4–8 bullets max. If `.git/` exists, check `git branch --show-current` and run `git log -n 25 --oneline` for recurring fixes, platform quirks (Windows paths, UTF-8, threading, process cleanup), and recent refactors.
 
 ---

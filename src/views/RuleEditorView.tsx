@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "../api";
+import { confirmDiscard, sameText, useUnsavedGuard } from "../hooks/useUnsavedGuard";
 import type { FingerprintPreview, RuleDocument, RuleSummary } from "../types";
 
 const KNOWN_TRAITS = [
@@ -26,6 +27,8 @@ interface RuleEditorViewProps {
   rules: RuleSummary[];
   selectedRuleName: string | null;
   onSelectRule: (name: string) => void;
+  /** Changes when the Brain folder changes, forcing the open rule to reload. */
+  reloadKey: string | null;
   onRulesChanged: () => Promise<void>;
   onInstallAll: () => Promise<void>;
   onToast: (
@@ -35,28 +38,41 @@ interface RuleEditorViewProps {
   ) => void;
 }
 
-function composeRuleRaw(
-  applyWhen: string[],
-  mode: string,
-  trigger: string,
-  body: string
-): string {
-  const lines = ["---"];
-  if (applyWhen.length > 0) {
-    lines.push(`apply_when: ${applyWhen.join(", ")}`);
+const FRONTMATTER_RE = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+
+/** Splits a rule into its raw frontmatter block (kept verbatim) and body. */
+function splitRaw(raw: string): { fm: string; body: string } {
+  const m = raw.match(FRONTMATTER_RE);
+  if (!m) return { fm: "", body: raw };
+  return { fm: m[0], body: raw.slice(m[0].length) };
+}
+
+/**
+ * Sets (or removes, when value is null) one `key: value` line inside a raw
+ * frontmatter block, leaving every other line, comment and key untouched.
+ */
+function setFrontmatterKey(fm: string, key: string, value: string | null): string {
+  const block = fm || "---\n---\n";
+  const eol = block.includes("\r\n") ? "\r\n" : "\n";
+  const lines = block.split(/\r?\n/);
+  const closeIdx = lines.findIndex((l, i) => i > 0 && /^---[ \t]*$/.test(l));
+  const keyRe = new RegExp(`^${key}[ \t]*:`);
+  const idx = lines.findIndex((l, i) => i > 0 && i < closeIdx && keyRe.test(l));
+  if (value === null) {
+    if (idx >= 0) lines.splice(idx, 1);
+  } else if (idx >= 0) {
+    lines[idx] = `${key}: ${value}`;
+  } else {
+    lines.splice(closeIdx, 0, `${key}: ${value}`);
   }
-  lines.push(`mode: ${mode || "inline"}`);
-  if (mode === "reference" && trigger.trim().length > 0) {
-    lines.push(`trigger: ${trigger.trim()}`);
-  }
-  lines.push("---");
-  return `${lines.join("\n")}\n${body}`;
+  return lines.join(eol);
 }
 
 export function RuleEditorView({
   rules,
   selectedRuleName,
-  onSelectRule,
+  onSelectRule: selectRuleRaw,
+  reloadKey,
   onRulesChanged,
   onInstallAll,
   onToast,
@@ -65,8 +81,10 @@ export function RuleEditorView({
   const [applyWhen, setApplyWhen] = useState<string[]>([]);
   const [mode, setMode] = useState<string>("inline");
   const [trigger, setTrigger] = useState<string>("");
+  const [fmRaw, setFmRaw] = useState<string>("");
   const [body, setBody] = useState<string>("");
   const [draftRaw, setDraftRaw] = useState<string>("");
+  const previewReq = useRef(0);
   const [preview, setPreview] = useState<FingerprintPreview | null>(null);
 
   const [creating, setCreating] = useState(false);
@@ -96,7 +114,9 @@ export function RuleEditorView({
         setApplyWhen(loaded.apply_when);
         setMode(loaded.mode || "inline");
         setTrigger(loaded.trigger ?? "");
-        setBody(loaded.body);
+        const parts = splitRaw(loaded.raw_content);
+        setFmRaw(parts.fm);
+        setBody(parts.body);
         setDraftRaw(loaded.raw_content);
       })
       .catch((err) => {
@@ -108,43 +128,70 @@ export function RuleEditorView({
     return () => {
       cancelled = true;
     };
-  }, [activeName]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeName, reloadKey]);
 
   useEffect(() => {
     if (!doc) {
       setPreview(null);
       return;
     }
+    const req = ++previewReq.current;
     const timer = window.setTimeout(() => {
       api
         .previewFingerprint(doc.name, draftRaw)
-        .then(setPreview)
+        .then((p) => {
+          // Ignore answers to older drafts that arrive late.
+          if (req === previewReq.current) setPreview(p);
+        })
         .catch(() => {});
     }, 120);
 
     return () => window.clearTimeout(timer);
   }, [doc?.name, draftRaw]);
 
-  const isDirty = doc
-    ? draftRaw.replace(/\r\n/g, "\n") !== doc.raw_content.replace(/\r\n/g, "\n")
-    : false;
+  const isDirty = doc ? !sameText(draftRaw, doc.raw_content) : false;
+  useUnsavedGuard("rule-editor", isDirty, doc ? `brain/${doc.name}` : "rule");
+
+  const onSelectRule = (name: string) => {
+    if (name !== doc?.name && !confirmDiscard("rule-editor")) return;
+    selectRuleRaw(name);
+  };
 
   const hasInitMarker = useMemo(() => {
     if (!doc?.is_init) return true;
     return draftRaw.replace(/\r\n/g, "\n").includes("## Non-Negotiable Rules\n");
   }, [doc?.is_init, draftRaw]);
 
-  const updateFrontmatterAndBody = (
+  /** Rewrites only the frontmatter keys a control changed; the body is untouched. */
+  const updateFrontmatter = (
     nextApplyWhen: string[],
     nextMode: string,
-    nextTrigger: string,
-    nextBody: string
+    nextTrigger: string
   ) => {
+    let fm = fmRaw;
+    if (nextApplyWhen.join(",") !== applyWhen.join(",")) {
+      fm = setFrontmatterKey(
+        fm,
+        "apply_when",
+        nextApplyWhen.length > 0 ? nextApplyWhen.join(", ") : null
+      );
+    }
+    if (nextMode !== mode) fm = setFrontmatterKey(fm, "mode", nextMode);
+    const wantTrigger =
+      nextMode === "reference" && nextTrigger.trim() ? nextTrigger.trim() : null;
+    const hadTrigger = mode === "reference" && trigger.trim() ? trigger.trim() : null;
+    if (wantTrigger !== hadTrigger) fm = setFrontmatterKey(fm, "trigger", wantTrigger);
     setApplyWhen(nextApplyWhen);
     setMode(nextMode);
     setTrigger(nextTrigger);
+    setFmRaw(fm);
+    setDraftRaw(fm + body);
+  };
+
+  const updateBody = (nextBody: string) => {
     setBody(nextBody);
-    setDraftRaw(composeRuleRaw(nextApplyWhen, nextMode, nextTrigger, nextBody));
+    setDraftRaw(fmRaw + nextBody);
   };
 
   const toggleTrait = (trait: string) => {
@@ -152,7 +199,7 @@ export function RuleEditorView({
     const next = exists
       ? applyWhen.filter((t) => t !== trait)
       : [...applyWhen, trait];
-    updateFrontmatterAndBody(next, mode, trigger, body);
+    updateFrontmatter(next, mode, trigger);
   };
 
   const handleSave = async (andInstall: boolean) => {
@@ -172,7 +219,9 @@ export function RuleEditorView({
       setApplyWhen(saved.apply_when);
       setMode(saved.mode || "inline");
       setTrigger(saved.trigger ?? "");
-      setBody(saved.body);
+      const parts = splitRaw(saved.raw_content);
+      setFmRaw(parts.fm);
+      setBody(parts.body);
       setDraftRaw(saved.raw_content);
       await onRulesChanged();
       if (andInstall) {
@@ -402,6 +451,7 @@ export function RuleEditorView({
                         key={trait}
                         type="button"
                         className={`trait-chip ${selected ? "selected" : ""}`}
+                        aria-pressed={selected}
                         onClick={() => toggleTrait(trait)}
                       >
                         {trait}
@@ -413,15 +463,15 @@ export function RuleEditorView({
 
               <div className="fm-row">
                 <span className="fm-label">mode</span>
-                <div className="pill-group">
+                <div className="pill-group" role="tablist" aria-label="Rule mode">
                   {(["inline", "reference"] as const).map((m) => (
                     <button
                       key={m}
                       type="button"
+                      role="tab"
+                      aria-selected={mode === m}
                       className={`filter-pill ${mode === m ? "active" : ""}`}
-                      onClick={() =>
-                        updateFrontmatterAndBody(applyWhen, m, trigger, body)
-                      }
+                      onClick={() => updateFrontmatter(applyWhen, m, trigger)}
                     >
                       {m}
                     </button>
@@ -442,14 +492,7 @@ export function RuleEditorView({
                       style={{ flex: 1, minWidth: 220, height: 28 }}
                       value={trigger}
                       placeholder="When should the agent read this playbook?"
-                      onChange={(e) =>
-                        updateFrontmatterAndBody(
-                          applyWhen,
-                          mode,
-                          e.target.value,
-                          body
-                        )
-                      }
+                      onChange={(e) => updateFrontmatter(applyWhen, mode, e.target.value)}
                     />
                   </>
                 )}
@@ -491,12 +534,7 @@ export function RuleEditorView({
                 if (doc.is_init) {
                   setDraftRaw(e.target.value);
                 } else {
-                  updateFrontmatterAndBody(
-                    applyWhen,
-                    mode,
-                    trigger,
-                    e.target.value
-                  );
+                  updateBody(e.target.value);
                 }
               }}
               spellCheck={false}

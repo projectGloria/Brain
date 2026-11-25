@@ -95,15 +95,11 @@ fn parse_frontmatter(raw: &str) -> (Vec<String>, String, Option<String>, String)
                         .filter(|s| !s.is_empty())
                         .collect();
                 }
-                "mode" => {
-                    if !val.is_empty() {
-                        mode = val.to_string();
-                    }
+                "mode" if !val.is_empty() => {
+                    mode = val.to_string();
                 }
-                "trigger" => {
-                    if !val.is_empty() {
-                        trigger = Some(val.to_string());
-                    }
+                "trigger" if !val.is_empty() => {
+                    trigger = Some(val.to_string());
                 }
                 _ => {}
             }
@@ -316,15 +312,28 @@ pub fn preview_fingerprint(
 
 fn sanitize_rule_filename(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
-    if trimmed.is_empty()
-        || trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.contains("..")
-    {
-        return Err(format!("Invalid rule filename '{}'.", name));
+    if !crate::brain_core::is_safe_file_name(trimmed) {
+        return Err(format!(
+            "Invalid rule filename '{}'. Use only letters, digits, '.', '_' and '-'.",
+            name
+        ));
     }
     if !trimmed.to_ascii_lowercase().ends_with(".md") {
         return Err("Rule files must end with .md".to_string());
     }
     Ok(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_rule_filename;
+
+    #[test]
+    fn rejects_drive_relative_and_odd_names() {
+        assert!(sanitize_rule_filename("C:evil.md").is_err());
+        assert!(sanitize_rule_filename("../x.md").is_err());
+        assert!(sanitize_rule_filename("a b.md").is_err());
+        assert!(sanitize_rule_filename("workflow.txt").is_err());
+        assert_eq!(sanitize_rule_filename(" local-notes.md ").unwrap(), "local-notes.md");
+    }
 }

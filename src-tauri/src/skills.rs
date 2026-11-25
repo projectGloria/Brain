@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::brain_core::{read_utf8, write_utf8_no_bom};
+use crate::brain_core::{is_safe_file_name, normalize_text, read_utf8, write_utf8_no_bom};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillEntry {
@@ -16,7 +16,7 @@ pub struct SkillEntry {
     pub content: String,
 }
 
-fn tool_targets() -> Result<Vec<(&'static str, &'static str, PathBuf)>, String> {
+pub fn tool_targets() -> Result<Vec<(&'static str, &'static str, PathBuf)>, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not resolve user home directory".to_string())?;
     Ok(vec![
         ("claude-code", "Claude Code", home.join(".claude").join("skills")),
@@ -63,15 +63,17 @@ pub fn list_skills(repo_root: Option<&Path>) -> Result<Vec<SkillEntry>, String> 
             };
             let repo_skill = sd.join("SKILL.md");
             let installed_skill = install_root.join(skill_name).join("SKILL.md");
-            let content = read_utf8(&repo_skill)?;
-            let norm_repo = content.replace("\r\n", "\n");
+            // One unreadable skill must not hide the rest of the list.
+            let Ok(content) = read_utf8(&repo_skill) else {
+                continue;
+            };
+            let norm_repo = normalize_text(&content);
 
             let status = if !installed_skill.is_file() {
                 "NOT_INSTALLED".to_string()
             } else {
                 let installed_raw = read_utf8(&installed_skill).unwrap_or_default();
-                let norm_installed = installed_raw.replace("\r\n", "\n");
-                if norm_repo == norm_installed {
+                if norm_repo == normalize_text(&installed_raw) {
                     "SYNCED".to_string()
                 } else {
                     "OUT_OF_SYNC".to_string()
@@ -82,7 +84,7 @@ pub fn list_skills(repo_root: Option<&Path>) -> Result<Vec<SkillEntry>, String> 
                 tool: tool_id.to_string(),
                 tool_label: tool_label.to_string(),
                 skill_name: skill_name.to_string(),
-                is_generated: skill_name == "monjita-init-brain",
+                is_generated: skill_name == "gloria-init-brain",
                 repo_path: repo_skill.to_string_lossy().to_string(),
                 installed_path: installed_skill.to_string_lossy().to_string(),
                 status,
@@ -107,14 +109,14 @@ pub fn save_skill(
         _ => return Err(format!("Unsupported tool '{tool}'.")),
     };
 
-    if skill_name == "monjita-init-brain" {
+    if skill_name == "gloria-init-brain" {
         return Err(
-            "monjita-init-brain/SKILL.md is generated from brain/init.md. Edit brain/init.md instead."
+            "gloria-init-brain/SKILL.md is generated from brain/init.md. Edit brain/init.md instead."
                 .to_string(),
         );
     }
 
-    if skill_name.contains('/') || skill_name.contains('\\') || skill_name.contains("..") {
+    if !is_safe_file_name(skill_name) {
         return Err(format!("Invalid skill name '{skill_name}'."));
     }
 
@@ -142,7 +144,7 @@ pub fn save_skill(
         "NOT_INSTALLED".to_string()
     } else {
         let installed_raw = read_utf8(&installed_skill).unwrap_or_default();
-        if normalized == installed_raw.replace("\r\n", "\n") {
+        if normalize_text(&normalized) == normalize_text(&installed_raw) {
             "SYNCED".to_string()
         } else {
             "OUT_OF_SYNC".to_string()

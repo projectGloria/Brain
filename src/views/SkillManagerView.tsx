@@ -7,6 +7,7 @@ import {
   Save,
   ShieldAlert,
 } from "lucide-react";
+import { confirmDiscard, sameText, useUnsavedGuard } from "../hooks/useUnsavedGuard";
 import type { SkillEntry } from "../types";
 
 interface SkillManagerViewProps {
@@ -56,7 +57,17 @@ export function SkillManagerView({
     }
   }, [activeSkill?.tool, activeSkill?.skill_name, activeSkill?.content]);
 
-  const isDirty = activeSkill ? draft !== activeSkill.content : false;
+  const isDirty = activeSkill ? !sameText(draft, activeSkill.content) : false;
+  useUnsavedGuard(
+    "skill-editor",
+    isDirty,
+    activeSkill ? `${activeSkill.tool}/${activeSkill.skill_name}` : "skill"
+  );
+
+  const selectSkill = (key: string) => {
+    if (activeSkill && keyOf(activeSkill) !== key && !confirmDiscard("skill-editor")) return;
+    setSelectedKey(key);
+  };
 
   const statusTone = (status: string) => {
     if (status === "SYNCED") return "ok";
@@ -113,7 +124,12 @@ export function SkillManagerView({
                 key={id}
                 type="button"
                 className={`filter-pill ${toolFilter === id ? "active" : ""}`}
-                onClick={() => setToolFilter(id)}
+                role="tab"
+                aria-selected={toolFilter === id}
+                onClick={() => {
+                  if (id !== toolFilter && !confirmDiscard("skill-editor")) return;
+                  setToolFilter(id);
+                }}
               >
                 {label}
               </button>
@@ -144,7 +160,7 @@ export function SkillManagerView({
             <AlertTriangle size={15} />
             <span>
               Legacy <code>agent-context-generator</code> skill found in Antigravity skills
-              directory — may collide with <code>monjita-init-brain</code>.
+              directory — may collide with <code>gloria-init-brain</code>.
             </span>
           </div>
           <button type="button" className="btn btn-sm" onClick={onRemoveLegacy}>
@@ -170,7 +186,7 @@ export function SkillManagerView({
                   key={key}
                   type="button"
                   className={`list-card ${isSelected ? "active" : ""}`}
-                  onClick={() => setSelectedKey(key)}
+                  onClick={() => selectSkill(key)}
                 >
                   <div className="list-card-top">
                     <span className="list-card-name">{skill.skill_name}</span>
@@ -253,7 +269,7 @@ export function SkillManagerView({
                 <div className="alert-strip info">
                   <ShieldAlert size={15} style={{ flexShrink: 0 }} />
                   <span>
-                    Direct edits to <code>monjita-init-brain/SKILL.md</code> are
+                    Direct edits to <code>gloria-init-brain/SKILL.md</code> are
                     overwritten on compile. Edit <code>brain/init.md</code> and run
                     Compile &amp; Install.
                   </span>

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AppConfig {
     pub brain_repo_path: Option<String>,
     pub scan_roots: Vec<String>,
@@ -14,13 +15,24 @@ pub fn master_brain_dir() -> Result<PathBuf, String> {
     Ok(home.join(".brain"))
 }
 
-pub fn legacy_skill_dir() -> Result<PathBuf, String> {
+/// Both places the retired `agent-context-generator` Antigravity skill may live.
+pub fn legacy_skill_dirs() -> Result<Vec<PathBuf>, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not resolve user home directory".to_string())?;
-    Ok(home
-        .join(".gemini")
-        .join("config")
-        .join("skills")
-        .join("agent-context-generator"))
+    let gemini = home.join(".gemini");
+    Ok(vec![
+        gemini.join("config").join("skills").join("agent-context-generator"),
+        gemini.join("antigravity").join("skills").join("agent-context-generator"),
+    ])
+}
+
+/// The first legacy skill folder that exists, or the primary location when none does.
+pub fn legacy_skill_dir() -> Result<PathBuf, String> {
+    let dirs = legacy_skill_dirs()?;
+    Ok(dirs
+        .iter()
+        .find(|d| d.exists())
+        .cloned()
+        .unwrap_or_else(|| dirs[0].clone()))
 }
 
 pub fn config_file_path() -> Result<PathBuf, String> {
@@ -57,12 +69,7 @@ pub fn detect_brain_repo() -> Option<PathBuf> {
         }
     }
 
-    for c in candidates {
-        if is_valid_brain_repo(&c) {
-            return Some(c);
-        }
-    }
-    None
+    candidates.into_iter().find(|c| is_valid_brain_repo(c))
 }
 
 pub fn load_or_init_config() -> Result<AppConfig, String> {
@@ -70,15 +77,26 @@ pub fn load_or_init_config() -> Result<AppConfig, String> {
     let mut cfg = if path.is_file() {
         let raw = fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read config {}: {e}", path.display()))?;
-        serde_json::from_str::<AppConfig>(&raw).unwrap_or_default()
+        match serde_json::from_str::<AppConfig>(raw.trim_start_matches('\u{FEFF}')) {
+            Ok(c) => c,
+            Err(_) => {
+                // Keep the unreadable file for the user instead of silently overwriting it.
+                let _ = fs::copy(&path, path.with_extension("json.bad"));
+                AppConfig::default()
+            }
+        }
     } else {
         AppConfig::default()
     };
 
-    let needs_repo_detect = match &cfg.brain_repo_path {
-        Some(p) => !is_valid_brain_repo(Path::new(p)),
-        None => true,
-    };
+    // Only auto-detect when no path was ever set; a user-chosen path that went
+    // invalid is reported in the UI rather than silently replaced.
+    let needs_repo_detect = cfg
+        .brain_repo_path
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty();
 
     let mut changed = !path.is_file();
     if needs_repo_detect {
@@ -111,5 +129,7 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(cfg)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
-    fs::write(&path, json).map_err(|e| format!("Failed to write config {}: {e}", path.display()))
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, json).map_err(|e| format!("Failed to write config {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("Failed to write config {}: {e}", path.display()))
 }

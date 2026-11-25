@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, FolderOpen, FolderPlus, Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 import type { AppConfig, AppStateSnapshot } from "../types";
 
 interface SettingsViewProps {
@@ -23,21 +24,36 @@ export function SettingsView({
   const [customRepos, setCustomRepos] = useState<string[]>(appState.config.custom_repos);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    setBrainRepoPath(appState.config.brain_repo_path ?? "");
-    setScanRoots(appState.config.scan_roots);
-    setCustomRepos(appState.config.custom_repos);
-  }, [appState.config]);
+  const differsFrom = (cfg: AppConfig) =>
+    (brainRepoPath.trim() || null) !== (cfg.brain_repo_path ?? null) ||
+    JSON.stringify(scanRoots) !== JSON.stringify(cfg.scan_roots) ||
+    JSON.stringify(customRepos) !== JSON.stringify(cfg.custom_repos);
 
-  const isDirty =
-    (brainRepoPath.trim() || null) !== (appState.config.brain_repo_path ?? null) ||
-    JSON.stringify(scanRoots) !== JSON.stringify(appState.config.scan_roots) ||
-    JSON.stringify(customRepos) !== JSON.stringify(appState.config.custom_repos);
+  // Every state refresh hands us a new config object; only re-seed the form when
+  // it still holds what was last loaded, so in-progress edits survive a refresh.
+  const seeded = useRef<AppConfig>(appState.config);
+  const configKey = JSON.stringify(appState.config);
+  useEffect(() => {
+    if (!differsFrom(seeded.current)) {
+      setBrainRepoPath(appState.config.brain_repo_path ?? "");
+      setScanRoots(appState.config.scan_roots);
+      setCustomRepos(appState.config.custom_repos);
+    }
+    seeded.current = appState.config;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configKey]);
+
+  const isDirty = differsFrom(appState.config);
+  useUnsavedGuard("settings", isDirty, "Settings");
 
   const pickDirectory = async (title: string): Promise<string | null> => {
-    const selected = await open({ directory: true, multiple: false, title });
-    if (typeof selected === "string" && selected.trim()) {
-      return selected;
+    try {
+      const selected = await open({ directory: true, multiple: false, title });
+      if (typeof selected === "string" && selected.trim()) {
+        return selected;
+      }
+    } catch (err) {
+      window.alert(`Could not open the folder picker: ${String(err)}`);
     }
     return null;
   };
@@ -90,6 +106,7 @@ export function SettingsView({
           className="btn btn-primary"
           onClick={handleSave}
           disabled={!isDirty || saving}
+          aria-label="Save settings"
         >
           <Save size={14} />
           <span>{saving ? "Saving..." : "Save Settings"}</span>
@@ -116,6 +133,16 @@ export function SettingsView({
               <span>Browse</span>
             </button>
           </div>
+          {!appState.brain_repo_valid && (
+            <div className="alert-strip warn">
+              <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+              <span>
+                The saved path no longer looks like the Brain repository (missing{" "}
+                <code>brain/init.md</code> or <code>install-brain.bat</code>). Pick the right
+                folder and save.
+              </span>
+            </div>
+          )}
         </section>
 
         <section className="settings-card">

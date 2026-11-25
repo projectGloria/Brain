@@ -1,8 +1,8 @@
 id = "Brain"
 name = "Brain"
-version = "0.2.0"
+version = "0.3.0"
 main_exe = "Brain.exe"
-icon = "Monjita.ico"
+icon = "Gloria.ico"
 accent = "#FF6B00"
 description = "Personal AI coding-agent rule compiler, multi-tool skill sync, and SHA-256 drift monitor"
 needs_webview2 = true

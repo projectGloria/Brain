@@ -5,7 +5,7 @@ trigger: Before creating/modifying `.github/workflows/*.yml`, setting up release
 ---
 # GitHub Actions & Releases
 - **One template for every app:** `.github/workflows/release.yml` is a copy of `GloriaSetup/templates/release.yml` (`gh api repos/projectGloria/GloriaSetup/contents/templates/release.yml --jq .content | base64 -d`). Edit only its `build` job; never hand-write a release pipeline, and remove any other workflow that publishes releases.
-- **Trigger:** `workflow_dispatch` only, with a boolean `dry_run` input (default `false`). Pushing to `main` never releases. A release is started by `/monjita-github-release` (`gh workflow run release.yml --ref main`).
+- **Trigger:** `workflow_dispatch` only, with a boolean `dry_run` input (default `false`). Pushing to `main` never releases. A release is started by `/gloria-github-release` (`gh workflow run release.yml --ref main`).
 - **Jobs:**
   1. `check` (shared, `projectGloria/GloriaSetup/.github/workflows/app-check.yml@main`, about 1 min): fails fast when the version files (`gloria.toml`, `package.json`, `tauri.conf.json`, `Cargo.toml`) disagree, when `v<version>` is already released, or when `gloria-pack --check` rejects `gloria.toml`. Picks the newest `gloria-setup` on npm.
   2. `build` (this repo, `windows-latest`): build and test, then copy the files to install into `stage/` and upload them as artifact `app`. Installer apps: `stage/` is the app folder holding `main_exe`. Extensions / Android: `stage/` holds the finished `.zip` / `.apk`.

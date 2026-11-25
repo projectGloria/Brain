@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "brain"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dirs 5.0.1",
  "regex",
@@ -178,7 +178,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "walkdir",
+ "toml 0.8.2",
 ]
 
 [[package]]

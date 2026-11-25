@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Cpu, ShieldCheck, Zap } from "lucide-react";
-import { MonjitaInteractive } from "./MonjitaInteractive";
+import { GloriaInteractive } from "./GloriaInteractive";
+import { useAppVersion } from "../hooks/useAppVersion";
 
 interface SplashScreenProps {
   fingerprint: string;
@@ -23,6 +24,7 @@ export function SplashScreen({
   onComplete,
 }: SplashScreenProps) {
   const [progress, setProgress] = useState(0);
+  const version = useAppVersion();
   const [exiting, setExiting] = useState(false);
   const completedRef = useRef(false);
 
@@ -84,7 +86,7 @@ export function SplashScreen({
     <div
       className={`splash-overlay ${exiting ? "exiting" : ""}`}
       role="dialog"
-      aria-label="Monjita Cyberspace Boot Screen"
+      aria-label="Gloria Cyberspace Boot Screen"
     >
       {/* Drag bar at top so splash can still move window */}
       <div className="splash-drag-strip" data-tauri-drag-region />
@@ -92,7 +94,7 @@ export function SplashScreen({
       {/* Decorative corner HUD telemetry */}
       <div className="splash-hud-corner top-left">
         <span className="hud-tag">SYS::NODE_01</span>
-        <span className="hud-sub">PROJECT GLORIA // BRAIN OS v0.2.0</span>
+        <span className="hud-sub">PROJECT GLORIA // BRAIN OS {version ? `v${version}` : ""}</span>
       </div>
       <div className="splash-hud-corner top-right">
         <span className="hud-tag secondary">
@@ -154,12 +156,12 @@ export function SplashScreen({
             />
           </svg>
 
-          {/* Pulsing energy core aligned behind Monjita's hands */}
-          <div className="monjita-orb-aura" aria-hidden="true" />
+          {/* Pulsing energy core aligned behind Gloria's hands */}
+          <div className="gloria-orb-aura" aria-hidden="true" />
 
-          {/* Levitating Monjita artwork with hologram scan beam */}
-          <div className="monjita-float-wrap">
-            <MonjitaInteractive variant="splash" />
+          {/* Levitating Gloria artwork with hologram scan beam */}
+          <div className="gloria-float-wrap">
+            <GloriaInteractive variant="splash" />
             <div className="holo-scan-beam" aria-hidden="true" />
           </div>
 
@@ -173,8 +175,8 @@ export function SplashScreen({
             <span>NEURAL RULE COMPILER INITIALIZED</span>
           </div>
 
-          <h1 className="splash-title" data-text="MONJITA // BRAIN">
-            MONJITA <span className="slash">//</span> BRAIN
+          <h1 className="splash-title" data-text="GLORIA // BRAIN">
+            GLORIA <span className="slash">//</span> BRAIN
           </h1>
 
           <p className="splash-desc">

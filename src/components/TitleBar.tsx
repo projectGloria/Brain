@@ -9,7 +9,8 @@ import {
   Square,
   X,
 } from "lucide-react";
-import monjitaIcon from "../assets/monjita.png";
+import gloriaIcon from "../assets/gloria.png";
+import { useAppVersion } from "../hooks/useAppVersion";
 
 interface TitleBarProps {
   fingerprint: string;
@@ -29,6 +30,7 @@ export function TitleBar({
   onReplaySplash,
 }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
+  const version = useAppVersion();
 
   useEffect(() => {
     const win = getCurrentWindow();
@@ -69,17 +71,16 @@ export function TitleBar({
       <div
         className="titlebar-left"
         data-tauri-drag-region
-        onDoubleClick={handleToggleMax}
       >
         <div className="titlebar-avatar-wrap" data-tauri-drag-region>
-          <img src={monjitaIcon} alt="Monjita" className="titlebar-icon" />
+          <img src={gloriaIcon} alt="" aria-hidden="true" className="titlebar-icon" />
         </div>
         <div className="titlebar-brand" data-tauri-drag-region>
           <span className="titlebar-title" data-tauri-drag-region>
-            MONJITA <span className="titlebar-slash">//</span> BRAIN
+            GLORIA <span className="titlebar-slash">//</span> BRAIN
           </span>
           <span className="titlebar-version" data-tauri-drag-region>
-            v0.2.0
+            {version ? `v${version}` : ""}
           </span>
         </div>
         <div className="telemetry-bars" aria-hidden="true" data-tauri-drag-region>
@@ -93,7 +94,6 @@ export function TitleBar({
       <div
         className="titlebar-drag"
         data-tauri-drag-region
-        onDoubleClick={handleToggleMax}
       />
 
       <div className="titlebar-actions">
@@ -105,14 +105,14 @@ export function TitleBar({
         >
           <span className={`fp-dot ${masterInSync ? "" : "stale"}`} />
           <span>HASH::{fingerprint}</span>
-          {masterInSync ? <Copy size={11} /> : <CopyCheck size={11} />}
+          {masterInSync ? <CopyCheck size={11} /> : <Copy size={11} />}
         </button>
 
         <button
           type="button"
           className="btn btn-sm"
           onClick={onReplaySplash}
-          title="Replay Monjita Holographic Boot Splash"
+          title="Replay Gloria Holographic Boot Splash"
           aria-label="Replay Boot Splash"
         >
           <Sparkles size={13} style={{ color: "#ffffff" }} />

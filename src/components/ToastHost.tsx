@@ -25,18 +25,20 @@ export function ToastHost({ toasts, onDismiss }: ToastHostProps) {
           t.tone === "warning" ? "#d4d4d8" : "#ffffff";
 
         return (
-          <div
+          <button
+            type="button"
             key={t.id}
             className={`toast-card ${t.tone}`}
             onClick={() => onDismiss(t.id)}
-            role="status"
+            role={t.tone === "error" ? "alert" : "status"}
+            title="Dismiss"
           >
             <Icon size={16} style={{ color: iconColor, flexShrink: 0, marginTop: 1 }} />
             <div style={{ minWidth: 0 }}>
               <div className="toast-title">{t.title}</div>
-              {t.detail && <div className="toast-detail">{t.detail}</div>}
+              {t.detail && <div className="toast-detail selectable">{t.detail}</div>}
             </div>
-          </div>
+          </button>
         );
       })}
     </div>

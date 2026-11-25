@@ -9,19 +9,30 @@ import {
   AlertTriangle,
   FileWarning,
   XCircle,
+  Copy,
+  Play,
+  FilePlus2,
 } from "lucide-react";
-import type { RepoStatus } from "../types";
+import type { RepoStatus, ToastItem } from "../types";
+
+const INIT_COMMAND = "/gloria-init-brain";
 
 interface DashboardViewProps {
   repos: RepoStatus[];
   loading: boolean;
-  syncingRepo: string | null;
+  syncingRepos: Set<string>;
   syncingAll: boolean;
+  /** True once templates/gitignore exists, so "Add .gitignore" can work. */
+  gitignoreReady: boolean;
   onRescan: () => void;
   onRecheck: (repoPath: string) => void;
   onSyncRepo: (repoPath: string) => void;
   onSyncAllDrifted: (repoPaths: string[]) => void;
+  onAddGitignore: (repoPath: string) => Promise<unknown>;
   onOpenFolder: (path: string) => void;
+  /** Opens Agent Runs with this repo and gloria-init-brain preselected. */
+  onRunInit: (repoPath: string) => void;
+  onToast: (tone: ToastItem["tone"], title: string, detail?: string) => void;
 }
 
 type StatusFilter = "all" | "drifted" | "ok" | "missing";
@@ -29,14 +40,28 @@ type StatusFilter = "all" | "drifted" | "ok" | "missing";
 export function DashboardView({
   repos,
   loading,
-  syncingRepo,
+  syncingRepos,
   syncingAll,
+  gitignoreReady,
   onRescan,
   onRecheck,
   onSyncRepo,
   onSyncAllDrifted,
+  onAddGitignore,
   onOpenFolder,
+  onRunInit,
+  onToast,
 }: DashboardViewProps) {
+  const [addingGitignore, setAddingGitignore] = useState<Set<string>>(new Set());
+
+  const copyInitCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(INIT_COMMAND);
+      onToast("info", `Copied ${INIT_COMMAND}`, "Paste it into your coding agent inside that repo.");
+    } catch {
+      onToast("warning", "Clipboard unavailable", INIT_COMMAND);
+    }
+  };
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
 
@@ -45,23 +70,32 @@ export function DashboardView({
     let brainDrift = 0;
     let repoDrift = 0;
     let attention = 0;
+    let missing = 0;
     for (const r of repos) {
       if (r.status === "UP TO DATE") upToDate++;
-      else if (r.status === "BRAIN DRIFT") brainDrift++;
-      else if (r.status === "REPO DRIFT") repoDrift++;
-      else attention++;
+      else if (r.status === "NO AGENTS.MD") missing++;
+      else {
+        attention++;
+        if (r.status === "BRAIN DRIFT") brainDrift++;
+        else if (r.status === "REPO DRIFT") repoDrift++;
+      }
     }
-    return { total: repos.length, upToDate, brainDrift, repoDrift, attention };
+    return { total: repos.length, upToDate, brainDrift, repoDrift, attention, missing };
   }, [repos]);
 
+  // Only repos whose .brain/ copy is actually out of date. BRAIN DRIFT and
+  // NO MARKER are AGENTS.md problems that /gloria-init-brain fixes, so a
+  // .brain/ sync cannot clear them and they must not be counted here.
   const syncablePaths = useMemo(
     () =>
       repos
         .filter(
           (r) =>
-            r.status === "BRAIN DRIFT" ||
-            r.status === "NO MARKER" ||
-            (r.status !== "NO AGENTS.MD" && !r.has_project_brain)
+            r.status !== "NO AGENTS.MD" &&
+            r.status !== "ERROR" &&
+            r.is_git_repo &&
+            !r.is_brain_repo &&
+            !r.project_brain_in_sync
         )
         .map((r) => r.repo_path),
     [repos]
@@ -88,13 +122,13 @@ export function DashboardView({
     if (status === "UP TO DATE") return "ok";
     if (status === "BRAIN DRIFT") return "drift";
     if (status === "REPO DRIFT") return "warn";
-    if (status === "OVER BUDGET") return "error";
+    if (status === "OVER BUDGET" || status === "ERROR") return "error";
     return "muted";
   };
 
   const StatusIcon = ({ status }: { status: string }) => {
     if (status === "UP TO DATE") return <CheckCircle2 size={12} />;
-    if (status === "OVER BUDGET") return <XCircle size={12} />;
+    if (status === "OVER BUDGET" || status === "ERROR") return <XCircle size={12} />;
     if (status === "NO AGENTS.MD" || status === "NO MARKER")
       return <FileWarning size={12} />;
     return <AlertTriangle size={12} />;
@@ -128,12 +162,13 @@ export function DashboardView({
             className="btn btn-primary"
             onClick={() => onSyncAllDrifted(syncablePaths)}
             disabled={syncingAll || syncablePaths.length === 0}
+            title="Mirror ~/.brain/*.md into every repo whose .brain/ copy is out of date"
           >
             <Sparkles size={14} className={syncingAll ? "spin" : ""} />
             <span>
               {syncingAll
                 ? "Syncing..."
-                : `Sync Drifted (${syncablePaths.length})`}
+                : `Sync .brain/ (${syncablePaths.length})`}
             </span>
           </button>
         </div>
@@ -156,8 +191,8 @@ export function DashboardView({
           <span className="kpi-label">Repo Drift</span>
           <span className="kpi-value amber">{stats.repoDrift}</span>
         </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Over / Missing</span>
+        <div className="kpi-card" title="Every repo that is not up to date, excluding repos without AGENTS.md">
+          <span className="kpi-label">Needs Attention</span>
           <span className="kpi-value red">{stats.attention}</span>
         </div>
       </div>
@@ -172,6 +207,7 @@ export function DashboardView({
               placeholder="Filter repositories..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              aria-label="Filter repositories"
             />
           </div>
 
@@ -181,12 +217,14 @@ export function DashboardView({
                 ["all", "All"],
                 ["drifted", "Needs Attention"],
                 ["ok", "Up to Date"],
-                ["missing", "No AGENTS.md"],
+                ["missing", `No AGENTS.md (${stats.missing})`],
               ] as const
             ).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
+                role="tab"
+                aria-selected={filter === id}
                 className={`filter-pill ${filter === id ? "active" : ""}`}
                 onClick={() => setFilter(id)}
               >
@@ -229,7 +267,12 @@ export function DashboardView({
               repo.sync_marker !== "-" &&
               repo.sync_marker !== "none" &&
               repo.sync_marker !== repo.expected;
-            const isSyncing = syncingRepo === repo.repo_path;
+            const isSyncing = syncingRepos.has(repo.repo_path);
+            const needsInit = repo.status === "BRAIN DRIFT" || repo.status === "NO MARKER";
+            const canSync =
+              repo.status !== "NO AGENTS.MD" && repo.status !== "ERROR" && !repo.is_brain_repo;
+            const gi = repo.gitignore_status;
+            const isAddingGi = addingGitignore.has(repo.repo_path);
             const tone = badgeClass(repo.status);
 
             return (
@@ -259,11 +302,49 @@ export function DashboardView({
                     {repo.has_claude_md && (
                       <span className="mini-tag">CLAUDE.md</span>
                     )}
+                    {repo.is_git_repo && (gi === "MISSING" || gi === "DIFFERS") && (
+                      <span
+                        className="mini-tag drift-file"
+                        title={
+                          gi === "MISSING"
+                            ? "No .gitignore in this repo"
+                            : ".gitignore differs from the shared draft"
+                        }
+                      >
+                        .gitignore {gi === "MISSING" ? "missing" : "differs"}
+                      </span>
+                    )}
                   </div>
 
                   <div className="repo-path selectable" title={repo.repo_path}>
                     {repo.repo_path}
                   </div>
+
+                  {needsInit && (
+                    <div className="init-hint">
+                      <span>
+                        AGENTS.md is stale. Run <code>{INIT_COMMAND}</code> in this repo.
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={copyInitCommand}
+                        aria-label={`Copy ${INIT_COMMAND}`}
+                        title={`Copy ${INIT_COMMAND}`}
+                      >
+                        <Copy size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => onRunInit(repo.repo_path)}
+                        title="Run it from Agent Runs, with a model and effort you pick"
+                      >
+                        <Play size={11} />
+                        <span>Run</span>
+                      </button>
+                    </div>
+                  )}
 
                   {(repo.drifted_files.length > 0 ||
                     repo.local_playbooks.length > 0) && (
@@ -282,26 +363,17 @@ export function DashboardView({
                   )}
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div className="repo-status-col">
                   <span className={`status-badge ${badgeClass(repo.status)}`}>
                     <StatusIcon status={repo.status} />
                     <span>{repo.status}</span>
                   </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: "var(--text-muted)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={repo.message}
-                  >
+                  <span className="repo-status-msg" title={repo.message}>
                     {repo.message}
                   </span>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div className="repo-metrics-col">
                   <div className="budget-col">
                     <div className="budget-top">
                       <span>AGENTS.md</span>
@@ -334,12 +406,38 @@ export function DashboardView({
                     type="button"
                     className="btn btn-sm"
                     onClick={() => onSyncRepo(repo.repo_path)}
-                    disabled={isSyncing}
+                    disabled={isSyncing || syncingAll || !canSync}
                     title="Sync ~/.brain/*.md into <repo>/.brain/ and update .git/info/exclude"
                   >
                     <RefreshCw size={12} className={isSyncing ? "spin" : ""} />
                     <span>Sync .brain/</span>
                   </button>
+                  {repo.is_git_repo && gi === "MISSING" && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        const path = repo.repo_path;
+                        setAddingGitignore((s) => new Set(s).add(path));
+                        void onAddGitignore(path).finally(() =>
+                          setAddingGitignore((s) => {
+                            const next = new Set(s);
+                            next.delete(path);
+                            return next;
+                          })
+                        );
+                      }}
+                      disabled={!gitignoreReady || isAddingGi}
+                      title={
+                        gitignoreReady
+                          ? "Write the shared .gitignore draft into this repo"
+                          : "Save a draft in the .gitignore tab first"
+                      }
+                    >
+                      <FilePlus2 size={12} className={isAddingGi ? "spin" : ""} />
+                      <span>.gitignore</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-sm"
@@ -353,6 +451,7 @@ export function DashboardView({
                     className="btn btn-sm"
                     onClick={() => onOpenFolder(repo.repo_path)}
                     title="Open folder in Explorer"
+                    aria-label={`Open ${repo.repo} in Explorer`}
                   >
                     <FolderOpen size={13} />
                   </button>

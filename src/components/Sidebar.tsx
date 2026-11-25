@@ -1,11 +1,14 @@
 import {
   AlertTriangle,
   BookOpen,
+  Bot,
   Cpu,
+  FileX2,
   LayoutDashboard,
   Settings,
+  TerminalSquare,
 } from "lucide-react";
-import { MonjitaInteractive } from "./MonjitaInteractive";
+import { GloriaInteractive } from "./GloriaInteractive";
 import type { NavTab } from "../types";
 
 interface SidebarProps {
@@ -14,6 +17,13 @@ interface SidebarProps {
   driftCount: number;
   ruleCount: number;
   stubCount: number;
+  cliAttentionCount: number;
+  /** An install/update job is running on the CLI's tab. */
+  cliBusy: boolean;
+  runningAgents: number;
+  gitignoreAttentionCount: number;
+  skillsAttentionCount: number;
+  masterExists: boolean;
   masterFingerprint: string;
   masterInSync: boolean;
   installing: boolean;
@@ -27,6 +37,12 @@ export function Sidebar({
   driftCount,
   ruleCount,
   stubCount,
+  cliAttentionCount,
+  cliBusy,
+  runningAgents,
+  gitignoreAttentionCount,
+  skillsAttentionCount,
+  masterExists,
   masterFingerprint,
   masterInSync,
   installing,
@@ -40,6 +56,7 @@ export function Sidebar({
     icon: typeof LayoutDashboard;
     badge?: string | number;
     warn?: boolean;
+    busy?: boolean;
   }> = [
     {
       id: "dashboard",
@@ -61,10 +78,37 @@ export function Sidebar({
       index: "03",
       label: "Skills",
       icon: Cpu,
+      badge: skillsAttentionCount > 0 ? skillsAttentionCount : undefined,
+      warn: skillsAttentionCount > 0,
+    },
+    {
+      id: "clis",
+      index: "04",
+      label: "CLI's",
+      icon: TerminalSquare,
+      badge: cliAttentionCount > 0 ? cliAttentionCount : undefined,
+      warn: cliAttentionCount > 0,
+      busy: cliBusy,
+    },
+    {
+      id: "runs",
+      index: "05",
+      label: "Agent Runs",
+      icon: Bot,
+      badge: runningAgents > 0 ? runningAgents : undefined,
+      busy: runningAgents > 0,
+    },
+    {
+      id: "gitignore",
+      index: "06",
+      label: ".gitignore",
+      icon: FileX2,
+      badge: gitignoreAttentionCount > 0 ? gitignoreAttentionCount : undefined,
+      warn: gitignoreAttentionCount > 0,
     },
     {
       id: "settings",
-      index: "04",
+      index: "07",
       label: "Settings",
       icon: Settings,
     },
@@ -84,11 +128,15 @@ export function Sidebar({
                 type="button"
                 className={`nav-item ${isActive ? "active" : ""}`}
                 onClick={() => onSelectTab(item.id)}
+                aria-current={isActive ? "page" : undefined}
               >
                 <span className="nav-item-left">
                   <span className="nav-index">{item.index}</span>
                   <Icon size={15} />
                   <span>{item.label}</span>
+                  {item.busy && (
+                    <span className="nav-busy" title="Working…" aria-label="Working" />
+                  )}
                 </span>
                 {item.badge !== undefined && (
                   <span className={`nav-badge ${item.warn ? "warn" : ""}`}>
@@ -101,13 +149,13 @@ export function Sidebar({
         </nav>
       </div>
 
-      {/* Prominent Full-Body Monjita Hologram Showcase */}
+      {/* Prominent Full-Body Gloria Hologram Showcase */}
       <div
-        className={`sidebar-monjita-stage ${installing ? "pulsing" : ""}`}
+        className={`sidebar-gloria-stage ${installing ? "pulsing" : ""}`}
         aria-hidden="true"
       >
         <svg
-          className="sidebar-monjita-reticle"
+          className="sidebar-gloria-reticle"
           viewBox="0 0 220 220"
         >
           <circle
@@ -136,9 +184,9 @@ export function Sidebar({
           />
         </svg>
 
-        <MonjitaInteractive variant="sidebar" />
+        <GloriaInteractive variant="sidebar" />
 
-        <div className="sidebar-monjita-floor" />
+        <div className="sidebar-gloria-floor" />
       </div>
 
       <div className="sidebar-footer">
@@ -156,7 +204,7 @@ export function Sidebar({
 
         <div className="status-card">
           <div className="status-card-top">
-            <span className="status-card-title">Monjita Core</span>
+            <span className="status-card-title">Gloria Core</span>
             <span
               className={`status-badge ${masterInSync ? "ok" : "drift"}`}
               style={{ fontSize: 9.5, padding: "1px 6px" }}
@@ -165,6 +213,8 @@ export function Sidebar({
                 ? "DEPLOYING"
                 : masterInSync
                 ? "SYNCED"
+                : masterExists
+                ? "STALE"
                 : "UNINSTALLED"}
             </span>
           </div>
