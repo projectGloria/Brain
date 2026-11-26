@@ -6,8 +6,8 @@ import {
   Dna,
   FileX2,
   LayoutDashboard,
+  Rocket,
   Settings,
-  TerminalSquare,
 } from "lucide-react";
 import { GloriaInteractive } from "./GloriaInteractive";
 import type { NavTab } from "../types";
@@ -22,6 +22,7 @@ interface SidebarProps {
   /** An install/update job is running on the CLI's tab. */
   cliBusy: boolean;
   runningAgents: number;
+  runningReleases: number;
   gitignoreAttentionCount: number;
   dnaAttentionCount: number;
   skillsAttentionCount: number;
@@ -42,6 +43,7 @@ export function Sidebar({
   cliAttentionCount,
   cliBusy,
   runningAgents,
+  runningReleases,
   gitignoreAttentionCount,
   dnaAttentionCount,
   skillsAttentionCount,
@@ -85,25 +87,22 @@ export function Sidebar({
       warn: skillsAttentionCount > 0,
     },
     {
-      id: "clis",
-      index: "04",
-      label: "CLI's",
-      icon: TerminalSquare,
-      badge: cliAttentionCount > 0 ? cliAttentionCount : undefined,
-      warn: cliAttentionCount > 0,
-      busy: cliBusy,
-    },
-    {
       id: "runs",
-      index: "05",
+      index: "04",
       label: "Agent Runs",
       icon: Bot,
-      badge: runningAgents > 0 ? runningAgents : undefined,
-      busy: runningAgents > 0,
+      badge:
+        runningAgents > 0
+          ? runningAgents
+          : cliAttentionCount > 0
+          ? cliAttentionCount
+          : undefined,
+      warn: runningAgents === 0 && cliAttentionCount > 0,
+      busy: runningAgents > 0 || cliBusy,
     },
     {
       id: "gitignore",
-      index: "06",
+      index: "05",
       label: ".gitignore",
       icon: FileX2,
       badge: gitignoreAttentionCount > 0 ? gitignoreAttentionCount : undefined,
@@ -111,11 +110,19 @@ export function Sidebar({
     },
     {
       id: "dna",
-      index: "07",
+      index: "06",
       label: "DNA",
       icon: Dna,
       badge: dnaAttentionCount > 0 ? dnaAttentionCount : undefined,
       warn: dnaAttentionCount > 0,
+    },
+    {
+      id: "evolve",
+      index: "07",
+      label: "Evolve",
+      icon: Rocket,
+      badge: runningReleases > 0 ? runningReleases : undefined,
+      busy: runningReleases > 0,
     },
     {
       id: "settings",

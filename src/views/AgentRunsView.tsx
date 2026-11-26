@@ -30,6 +30,7 @@ interface AgentRunsViewProps {
   preset: AgentRunPreset | null;
   onOpenFolder: (path: string) => void;
   onToast: (tone: ToastItem["tone"], title: string, detail?: string) => void;
+  footer?: React.ReactNode;
 }
 
 type PromptMode = "skill" | "custom";
@@ -119,6 +120,7 @@ export function AgentRunsView({
   preset,
   onOpenFolder,
   onToast,
+  footer,
 }: AgentRunsViewProps) {
   const [form, setForm] = useState<Composer>(loadComposer);
   const [activeKey, setActiveKey] = useState<string | null>(runs.sessions[0]?.key ?? null);
@@ -557,6 +559,7 @@ export function AgentRunsView({
           )}
         </section>
       )}
+      {footer}
     </div>
   );
 }

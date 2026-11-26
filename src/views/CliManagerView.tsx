@@ -35,6 +35,7 @@ interface CliManagerViewProps {
   onInstallAll: () => void;
   onOpenFolder: (path: string) => void;
   onToast: (tone: ToastItem["tone"], title: string, detail?: string) => void;
+  embedded?: boolean;
 }
 
 /** Numeric semver-ish compare: returns >0 when a is newer than b. */
@@ -93,6 +94,7 @@ export function CliManagerView({
   onInstallAll,
   onOpenFolder,
   onToast,
+  embedded = false,
 }: CliManagerViewProps) {
   const [armed, setArmed] = useState<string | null>(null);
   // Explicit show/hide per CLI; otherwise a failed job's log starts open.
@@ -191,12 +193,18 @@ export function CliManagerView({
   const stateTone = (s: CliState) =>
     s === "INSTALLED" ? "ok" : s === "UPDATE AVAILABLE" ? "drift" : "muted";
 
-  return (
-    <div className="view-scroll">
+  const content = (
+    <>
       <div className="page-header">
         <div>
           <div className="page-eyebrow">AGENT RUNTIMES // CLI CONTROL</div>
-          <h1 className="page-title">Coding-Agent CLIs</h1>
+          {embedded ? (
+            <h2 className="page-title" style={{ fontSize: 17 }}>
+              Coding-Agent CLIs
+            </h2>
+          ) : (
+            <h1 className="page-title">Coding-Agent CLIs</h1>
+          )}
           <p className="page-subtitle">
             Detect, install, update and configure Claude Code, Codex and Antigravity CLI.
             Installs and updates go through winget (or npm / the native updater when that is
@@ -446,6 +454,16 @@ export function CliManagerView({
           </div>
         </section>
       )}
-    </div>
+    </>
   );
+
+  if (embedded) {
+    return (
+      <section className="cli-embedded-section" aria-label="Coding-Agent CLIs">
+        {content}
+      </section>
+    );
+  }
+
+  return <div className="view-scroll">{content}</div>;
 }

@@ -6,6 +6,7 @@ import { SplashScreen } from "./components/SplashScreen";
 import { TitleBar } from "./components/TitleBar";
 import { ToastHost } from "./components/ToastHost";
 import { useAgentRuns } from "./hooks/useAgentRuns";
+import { useReleaseRuns } from "./hooks/useReleaseRuns";
 import { confirmDiscard } from "./hooks/useUnsavedGuard";
 import type {
   AgentRunPreset,
@@ -28,6 +29,7 @@ import { AgentRunsView } from "./views/AgentRunsView";
 import { CliManagerView, cliState, type CliJobKind } from "./views/CliManagerView";
 import { DashboardView } from "./views/DashboardView";
 import { DnaView } from "./views/DnaView";
+import { EvolveView } from "./views/EvolveView";
 import { GitignoreView } from "./views/GitignoreView";
 import { RuleEditorView } from "./views/RuleEditorView";
 import { SettingsView } from "./views/SettingsView";
@@ -80,6 +82,7 @@ export function App() {
   );
 
   const agentRuns = useAgentRuns(pushToast);
+  const releaseRuns = useReleaseRuns(pushToast);
   const [runPreset, setRunPreset] = useState<AgentRunPreset | null>(null);
 
   const dismissToast = useCallback((id: number) => {
@@ -441,6 +444,11 @@ export function App() {
     [dnaProjects]
   );
 
+  const runningReleases = useMemo(
+    () => Object.values(releaseRuns.jobsByRepo).filter((j) => j.status === "running").length,
+    [releaseRuns.jobsByRepo]
+  );
+
   const handleCreateDnaTools = async (
     repoPath: string,
     toolNames?: string[]
@@ -523,6 +531,7 @@ export function App() {
             cliAttentionCount={cliAttentionCount}
             cliBusy={Object.values(cliBusy).some(Boolean)}
             runningAgents={agentRuns.runningCount}
+            runningReleases={runningReleases}
             gitignoreAttentionCount={gitignoreAttentionCount}
             dnaAttentionCount={dnaAttentionCount}
             skillsAttentionCount={skillsAttentionCount}
@@ -597,24 +606,6 @@ export function App() {
               />
             )}
 
-            {activeTab === "clis" && (
-              <CliManagerView
-                clis={clis}
-                latest={cliLatest}
-                loading={loadingClis}
-                checkingLatest={checkingLatest}
-                skills={skills}
-                installing={installing}
-                busy={cliBusy}
-                logs={cliLogs}
-                onRunAction={(cli, kind) => void handleCliAction(cli, kind)}
-                onRefresh={(force) => void refreshClis(force)}
-                onInstallAll={handleInstallAll}
-                onOpenFolder={handleOpenFolder}
-                onToast={pushToast}
-              />
-            )}
-
             {activeTab === "runs" && (
               <AgentRunsView
                 runs={agentRuns}
@@ -624,6 +615,24 @@ export function App() {
                 preset={runPreset}
                 onOpenFolder={handleOpenFolder}
                 onToast={pushToast}
+                footer={
+                  <CliManagerView
+                    embedded
+                    clis={clis}
+                    latest={cliLatest}
+                    loading={loadingClis}
+                    checkingLatest={checkingLatest}
+                    skills={skills}
+                    installing={installing}
+                    busy={cliBusy}
+                    logs={cliLogs}
+                    onRunAction={(cli, kind) => void handleCliAction(cli, kind)}
+                    onRefresh={(force) => void refreshClis(force)}
+                    onInstallAll={handleInstallAll}
+                    onOpenFolder={handleOpenFolder}
+                    onToast={pushToast}
+                  />
+                }
               />
             )}
 
@@ -648,6 +657,16 @@ export function App() {
                 onRescan={refreshRepos}
                 onCreateTools={handleCreateDnaTools}
                 onCreateMissing={handleCreateDnaMissing}
+                onOpenFolder={handleOpenFolder}
+              />
+            )}
+
+            {activeTab === "evolve" && (
+              <EvolveView
+                projects={dnaProjects}
+                loading={scanningRepos || loadingDna}
+                releaseRuns={releaseRuns}
+                onRescan={refreshRepos}
                 onOpenFolder={handleOpenFolder}
               />
             )}

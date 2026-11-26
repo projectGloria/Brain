@@ -19,6 +19,9 @@ import type {
   DnaApplyResult,
   DnaProjectInspect,
   DnaProjectSummary,
+  ReleasePreflight,
+  ReleaseRequest,
+  ReleaseStarted,
   RepoStatus,
   RuleDocument,
   RuleSummary,
@@ -97,4 +100,12 @@ export const api = {
     }),
   dnaCreateToolsMany: (repoPaths: string[]) =>
     invoke<DnaApplyResult[]>("dna_create_tools_many_cmd", { repoPaths }),
+
+  releasePreflight: (repoPath: string) =>
+    invoke<ReleasePreflight>("release_preflight_cmd", { repoPath }),
+  startRelease: (req: ReleaseRequest) =>
+    invoke<ReleaseStarted>("start_release_cmd", { req }),
+  cancelRelease: (runId: string) =>
+    invoke<boolean>("cancel_release_cmd", { runId }),
+  openUrl: (url: string) => invoke<void>("open_url_cmd", { url }),
 };

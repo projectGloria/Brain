@@ -2,10 +2,10 @@ export type NavTab =
   | "dashboard"
   | "rules"
   | "skills"
-  | "clis"
   | "runs"
   | "gitignore"
   | "dna"
+  | "evolve"
   | "settings";
 
 export interface AppConfig {
@@ -343,5 +343,108 @@ export interface DnaApplyResult {
   ok: boolean;
   written: string[];
   skipped_custom: string[];
+  error: string | null;
+}
+
+export type ReleaseStepId =
+  | "preflight"
+  | "bump"
+  | "validate"
+  | "push"
+  | "dispatch"
+  | "watch"
+  | "report";
+
+export type ReleaseStepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+
+export interface ReleaseVersionFile {
+  path: string;
+  version: string;
+  matches_primary: boolean;
+}
+
+export interface ReleasePreflight {
+  repo_name: string;
+  repo_path: string;
+  current_version: string | null;
+  suggested_version: string;
+  version_files: ReleaseVersionFile[];
+  git_branch: string | null;
+  dirty_files: string[];
+  last_release: string | null;
+  existing_tags: string[];
+  workflow_status: "ready" | "custom" | "missing" | string;
+  has_gloria_toml: boolean;
+  is_gloria_setup: boolean;
+  gh_available: boolean;
+  dev_self_release: boolean;
+  blockers: string[];
+}
+
+export interface ReleaseRequest {
+  run_id: string;
+  repo_path: string;
+  version: string;
+  note?: string | null;
+}
+
+export interface ReleaseStarted {
+  run_id: string;
+  version: string;
+}
+
+export interface ReleaseStepEvent {
+  run_id: string;
+  step_id: ReleaseStepId;
+  status: ReleaseStepStatus;
+  detail: string | null;
+}
+
+export interface ReleaseLogEvent {
+  run_id: string;
+  stream: "out" | "err" | "info";
+  text: string;
+}
+
+export interface ReleaseDoneEvent {
+  run_id: string;
+  ok: boolean;
+  cancelled: boolean;
+  old_version: string | null;
+  new_version: string;
+  run_url: string | null;
+  release_url: string | null;
+  assets: string[];
+  error: string | null;
+}
+
+export interface ReleaseLogLine {
+  id: number;
+  stream: "out" | "err" | "info";
+  text: string;
+}
+
+export interface ReleaseStepState {
+  id: ReleaseStepId;
+  label: string;
+  status: ReleaseStepStatus;
+  detail: string | null;
+}
+
+export interface ReleaseJob {
+  run_id: string;
+  repo_path: string;
+  repo_name: string;
+  old_version: string | null;
+  new_version: string;
+  status: "running" | "done" | "failed" | "stopped";
+  started_at: number;
+  ended_at: number | null;
+  steps: ReleaseStepState[];
+  lines: ReleaseLogLine[];
+  dropped: number;
+  run_url: string | null;
+  release_url: string | null;
+  assets: string[];
   error: string | null;
 }

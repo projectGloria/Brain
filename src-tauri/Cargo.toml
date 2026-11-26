@@ -1,6 +1,6 @@
 [package]
 name = "brain"
-version = "0.4.0"
+version = "0.5.1"
 description = "Personal AI coding-agent rule compiler, multi-tool skill sync, and SHA-256 drift monitor"
 authors = ["projectGloria"]
 edition = "2021"

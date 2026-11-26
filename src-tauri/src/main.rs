@@ -6,6 +6,7 @@ mod clis;
 mod config;
 mod dna;
 mod gitignore;
+mod release;
 mod rules;
 mod skills;
 
@@ -541,6 +542,58 @@ async fn dna_create_tools_many_cmd(repo_paths: Vec<String>) -> Result<Vec<DnaApp
     .await
 }
 
+// --- Releases ---
+
+#[tauri::command]
+async fn release_preflight_cmd(repo_path: String) -> Result<release::ReleasePreflight, String> {
+    blocking(move || release::preflight(Path::new(&repo_path))).await
+}
+
+#[tauri::command]
+async fn start_release_cmd(
+    app: tauri::AppHandle,
+    req: release::ReleaseRequest,
+) -> Result<release::ReleaseStarted, String> {
+    blocking(move || release::start(app, req)).await
+}
+
+#[tauri::command]
+async fn cancel_release_cmd(run_id: String) -> Result<bool, String> {
+    blocking(move || release::cancel(&run_id)).await
+}
+
+#[tauri::command]
+async fn open_url_cmd(url: String) -> Result<(), String> {
+    blocking(move || {
+        let trimmed = url.trim();
+        if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+            return Err("Only http(s) URLs can be opened.".to_string());
+        }
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("explorer.exe");
+            c.arg(trimmed);
+            c
+        };
+        #[cfg(target_os = "macos")]
+        let mut cmd = {
+            let mut c = Command::new("open");
+            c.arg(trimmed);
+            c
+        };
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let mut cmd = {
+            let mut c = Command::new("xdg-open");
+            c.arg(trimmed);
+            c
+        };
+        cmd.spawn()
+            .map_err(|e| format!("Failed to open URL: {e}"))?;
+        Ok(())
+    })
+    .await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -582,13 +635,18 @@ fn main() {
             dna_inspect_repo_cmd,
             dna_create_tools_cmd,
             dna_create_tools_many_cmd,
+            release_preflight_cmd,
+            start_release_cmd,
+            cancel_release_cmd,
+            open_url_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Brain application")
         .run(|_app, event| {
-            // No agent should keep editing repos after the window is gone.
+            // No agent or release should keep running after the window is gone.
             if let tauri::RunEvent::Exit = event {
                 agent_runs::cancel_all();
+                release::cancel_all();
             }
         });
 }
