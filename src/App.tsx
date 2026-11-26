@@ -14,6 +14,8 @@ import type {
   CliActionResult,
   CliInfo,
   CliLatest,
+  DnaApplyResult,
+  DnaProjectSummary,
   GitignoreApplyResult,
   GitignoreTemplate,
   NavTab,
@@ -25,6 +27,7 @@ import type {
 import { AgentRunsView } from "./views/AgentRunsView";
 import { CliManagerView, cliState, type CliJobKind } from "./views/CliManagerView";
 import { DashboardView } from "./views/DashboardView";
+import { DnaView } from "./views/DnaView";
 import { GitignoreView } from "./views/GitignoreView";
 import { RuleEditorView } from "./views/RuleEditorView";
 import { SettingsView } from "./views/SettingsView";
@@ -51,6 +54,8 @@ export function App() {
 
   const [gitignoreTemplate, setGitignoreTemplate] = useState<GitignoreTemplate | null>(null);
   const [gitignoreError, setGitignoreError] = useState<string | null>(null);
+  const [dnaProjects, setDnaProjects] = useState<DnaProjectSummary[]>([]);
+  const [loadingDna, setLoadingDna] = useState(false);
 
   const [scanningRepos, setScanningRepos] = useState(false);
   const [syncingRepos, setSyncingRepos] = useState<Set<string>>(new Set());
@@ -98,6 +103,15 @@ export function App() {
     try {
       const list = await api.scanRepos();
       setRepos(list);
+      const validPaths = list.filter((r) => r.status !== "ERROR").map((r) => r.repo_path);
+      setLoadingDna(true);
+      try {
+        setDnaProjects(await api.dnaScanRepos(validPaths));
+      } catch {
+        // Non-fatal: DNA tab can rescan on demand.
+      } finally {
+        setLoadingDna(false);
+      }
     } catch (err) {
       pushToast("error", "Repository scan failed", String(err));
     } finally {
@@ -422,6 +436,53 @@ export function App() {
     [repos]
   );
 
+  const dnaAttentionCount = useMemo(
+    () => dnaProjects.filter((p) => p.status !== "READY").length,
+    [dnaProjects]
+  );
+
+  const handleCreateDnaTools = async (
+    repoPath: string,
+    toolNames?: string[]
+  ): Promise<DnaApplyResult | null> => {
+    try {
+      const res = await api.dnaCreateTools(repoPath, toolNames);
+      if (res.ok) {
+        const inspect = await api.dnaInspectRepo(repoPath);
+        setDnaProjects((prev) =>
+          prev.map((p) => (p.repo_path === repoPath ? inspect.summary : p))
+        );
+        pushToast(
+          "success",
+          `Created tools in ${inspect.summary.repo}`,
+          `Wrote ${res.written.length} script(s) to gloriaTools/`
+        );
+      } else {
+        pushToast("error", "Create tools failed", res.error ?? "Unknown error");
+      }
+      return res;
+    } catch (err) {
+      pushToast("error", "Create tools failed", String(err));
+      return null;
+    }
+  };
+
+  const handleCreateDnaMissing = async (repoPaths: string[]) => {
+    try {
+      const results = await api.dnaCreateToolsMany(repoPaths);
+      const okCount = results.filter((r) => r.ok).length;
+      const failCount = results.length - okCount;
+      await refreshRepos();
+      pushToast(
+        failCount > 0 ? "warning" : "success",
+        `DNA batch complete (${okCount}/${results.length})`,
+        failCount > 0 ? `${failCount} repository(s) failed` : "gloriaTools/ created for all missing projects"
+      );
+    } catch (err) {
+      pushToast("error", "Batch tool creation failed", String(err));
+    }
+  };
+
   const skillsAttentionCount = useMemo(
     () => skills.filter((s) => s.status !== "SYNCED").length,
     [skills]
@@ -463,6 +524,7 @@ export function App() {
             cliBusy={Object.values(cliBusy).some(Boolean)}
             runningAgents={agentRuns.runningCount}
             gitignoreAttentionCount={gitignoreAttentionCount}
+            dnaAttentionCount={dnaAttentionCount}
             skillsAttentionCount={skillsAttentionCount}
             masterExists={appState?.master_exists ?? false}
             masterFingerprint={appState?.master_fingerprint ?? "............"}
@@ -575,6 +637,17 @@ export function App() {
                 onReloadTemplate={() => void refreshGitignore()}
                 onApply={handleApplyGitignore}
                 onRescan={refreshRepos}
+                onOpenFolder={handleOpenFolder}
+              />
+            )}
+
+            {activeTab === "dna" && (
+              <DnaView
+                projects={dnaProjects}
+                loading={scanningRepos || loadingDna}
+                onRescan={refreshRepos}
+                onCreateTools={handleCreateDnaTools}
+                onCreateMissing={handleCreateDnaMissing}
                 onOpenFolder={handleOpenFolder}
               />
             )}

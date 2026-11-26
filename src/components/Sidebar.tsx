@@ -3,6 +3,7 @@ import {
   BookOpen,
   Bot,
   Cpu,
+  Dna,
   FileX2,
   LayoutDashboard,
   Settings,
@@ -22,6 +23,7 @@ interface SidebarProps {
   cliBusy: boolean;
   runningAgents: number;
   gitignoreAttentionCount: number;
+  dnaAttentionCount: number;
   skillsAttentionCount: number;
   masterExists: boolean;
   masterFingerprint: string;
@@ -41,6 +43,7 @@ export function Sidebar({
   cliBusy,
   runningAgents,
   gitignoreAttentionCount,
+  dnaAttentionCount,
   skillsAttentionCount,
   masterExists,
   masterFingerprint,
@@ -107,8 +110,16 @@ export function Sidebar({
       warn: gitignoreAttentionCount > 0,
     },
     {
-      id: "settings",
+      id: "dna",
       index: "07",
+      label: "DNA",
+      icon: Dna,
+      badge: dnaAttentionCount > 0 ? dnaAttentionCount : undefined,
+      warn: dnaAttentionCount > 0,
+    },
+    {
+      id: "settings",
+      index: "08",
       label: "Settings",
       icon: Settings,
     },

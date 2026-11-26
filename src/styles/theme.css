@@ -3033,3 +3033,138 @@ button.toast-card:focus-visible {
   flex: 1 1 180px;
   min-width: 0;
 }
+
+/* ========================
+   DNA (gloriaTools Scaffolder)
+   ======================== */
+.dna-projects-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dna-project-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.dna-project-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.dna-project-row:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-glass-strong);
+}
+
+.dna-project-row.selected {
+  border-color: var(--accent-border);
+  background: var(--bg-glass-elevated);
+}
+
+.dna-stack-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.dna-stack-pill {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--silver-soft);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.dna-inspect-pane {
+  min-width: 0;
+  min-height: 0;
+}
+
+.dna-tool-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(8, 8, 8, 0.7);
+}
+
+.dna-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-glass);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.dna-tool-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.dna-tool-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dna-check-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.dna-tool-desc {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dna-code-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.dna-code-preview pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre;
+}

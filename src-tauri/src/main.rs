@@ -4,6 +4,7 @@ mod agent_runs;
 mod brain_core;
 mod clis;
 mod config;
+mod dna;
 mod gitignore;
 mod rules;
 mod skills;
@@ -18,6 +19,7 @@ use config::{
     is_valid_brain_repo, legacy_skill_dir, load_or_init_config, master_brain_dir, save_config,
     AppConfig,
 };
+use dna::{DnaApplyResult, DnaProjectInspect, DnaProjectSummary};
 use gitignore::{GitignoreApplyResult, GitignoreRepoStatus, GitignoreTemplate};
 use rules::{
     create_rule, delete_rule, list_rules, preview_fingerprint, read_rule, resolve_brain_dir,
@@ -508,6 +510,37 @@ async fn cli_models_cmd(id: String, force: Option<bool>) -> Result<agent_runs::M
     blocking(move || agent_runs::model_catalog(&id, force.unwrap_or(false))).await
 }
 
+// --- DNA (gloriaTools analyzer & generator) ---
+
+#[tauri::command]
+async fn dna_scan_repos_cmd(repo_paths: Vec<String>) -> Result<Vec<DnaProjectSummary>, String> {
+    blocking(move || Ok(dna::scan_repos(&repo_paths))).await
+}
+
+#[tauri::command]
+async fn dna_inspect_repo_cmd(repo_path: String) -> Result<DnaProjectInspect, String> {
+    blocking(move || Ok(dna::inspect_repo(Path::new(&repo_path)))).await
+}
+
+#[tauri::command]
+async fn dna_create_tools_cmd(
+    repo_path: String,
+    tool_names: Option<Vec<String>>,
+) -> Result<DnaApplyResult, String> {
+    blocking(move || Ok(dna::create_tools(Path::new(&repo_path), tool_names.as_deref()))).await
+}
+
+#[tauri::command]
+async fn dna_create_tools_many_cmd(repo_paths: Vec<String>) -> Result<Vec<DnaApplyResult>, String> {
+    blocking(move || {
+        Ok(repo_paths
+            .iter()
+            .map(|p| dna::create_tools(Path::new(p), None))
+            .collect())
+    })
+    .await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -545,6 +578,10 @@ fn main() {
             cli_models_cmd,
             cli_auth_status,
             open_cli_login,
+            dna_scan_repos_cmd,
+            dna_inspect_repo_cmd,
+            dna_create_tools_cmd,
+            dna_create_tools_many_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Brain application")

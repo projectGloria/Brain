@@ -16,6 +16,9 @@ import type {
   InstallResult,
   ModelCatalog,
   CliAuthStatus,
+  DnaApplyResult,
+  DnaProjectInspect,
+  DnaProjectSummary,
   RepoStatus,
   RuleDocument,
   RuleSummary,
@@ -82,4 +85,16 @@ export const api = {
     invoke<ModelCatalog>("cli_models_cmd", { id, force }),
   cliAuthStatus: (id: string) => invoke<CliAuthStatus>("cli_auth_status", { id }),
   openCliLogin: (id: string) => invoke<void>("open_cli_login", { id }),
+
+  dnaScanRepos: (repoPaths: string[]) =>
+    invoke<DnaProjectSummary[]>("dna_scan_repos_cmd", { repoPaths }),
+  dnaInspectRepo: (repoPath: string) =>
+    invoke<DnaProjectInspect>("dna_inspect_repo_cmd", { repoPath }),
+  dnaCreateTools: (repoPath: string, toolNames?: string[]) =>
+    invoke<DnaApplyResult>("dna_create_tools_cmd", {
+      repoPath,
+      toolNames: toolNames ?? null,
+    }),
+  dnaCreateToolsMany: (repoPaths: string[]) =>
+    invoke<DnaApplyResult[]>("dna_create_tools_many_cmd", { repoPaths }),
 };

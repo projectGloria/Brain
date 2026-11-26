@@ -5,6 +5,7 @@ export type NavTab =
   | "clis"
   | "runs"
   | "gitignore"
+  | "dna"
   | "settings";
 
 export interface AppConfig {
@@ -306,4 +307,41 @@ export interface AgentRunPreset {
   repo_path: string;
   skill: string;
   nonce: number;
+}
+
+export type DnaToolStatus = "NEW" | "IN_SYNC" | "OUTDATED" | "CUSTOM";
+export type DnaProjectStatus = "MISSING" | "READY" | "OUTDATED" | "PARTIAL";
+
+export interface DnaToolPreview {
+  file_name: string;
+  description: string;
+  status: DnaToolStatus | string;
+  content: string;
+}
+
+export interface DnaProjectSummary {
+  repo: string;
+  repo_path: string;
+  stacks: string[];
+  default_port: number | null;
+  main_exe: string | null;
+  has_gloria_toml: boolean;
+  manifests: string[];
+  status: DnaProjectStatus | string;
+  existing_count: number;
+  expected_count: number;
+  custom_count: number;
+}
+
+export interface DnaProjectInspect {
+  summary: DnaProjectSummary;
+  tools: DnaToolPreview[];
+}
+
+export interface DnaApplyResult {
+  repo_path: string;
+  ok: boolean;
+  written: string[];
+  skipped_custom: string[];
+  error: string | null;
 }
