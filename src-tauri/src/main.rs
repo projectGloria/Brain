@@ -550,6 +550,11 @@ async fn release_preflight_cmd(repo_path: String) -> Result<release::ReleasePref
 }
 
 #[tauri::command]
+async fn release_bootstrap_cmd(repo_path: String) -> Result<Vec<String>, String> {
+    blocking(move || release::bootstrap_gloria_setup(Path::new(&repo_path), None)).await
+}
+
+#[tauri::command]
 async fn start_release_cmd(
     app: tauri::AppHandle,
     req: release::ReleaseRequest,
@@ -636,6 +641,7 @@ fn main() {
             dna_create_tools_cmd,
             dna_create_tools_many_cmd,
             release_preflight_cmd,
+            release_bootstrap_cmd,
             start_release_cmd,
             cancel_release_cmd,
             open_url_cmd,

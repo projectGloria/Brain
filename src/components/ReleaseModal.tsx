@@ -2,10 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  Copy,
   ExternalLink,
   GitBranch,
   RefreshCw,
   Rocket,
+  RotateCcw,
   Square,
   X,
 } from "lucide-react";
@@ -48,6 +50,9 @@ export function ReleaseModal({
   const [preflightError, setPreflightError] = useState<string | null>(null);
   const [versionInput, setVersionInput] = useState("");
   const [noteInput, setNoteInput] = useState("");
+  const [runLocalCheck, setRunLocalCheck] = useState(false);
+  const [copiedError, setCopiedError] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -138,10 +143,55 @@ export function ReleaseModal({
     if (!canSubmit || !preflight) return;
     setSubmitting(true);
     try {
-      await runs.start(repoPath, normalized, preflight.current_version, noteInput);
+      await runs.start(repoPath, normalized, preflight.current_version, {
+        note: noteInput,
+        runLocalCheck,
+      });
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleRetryOrFix = async () => {
+    if (!job || job.status !== "failed") return;
+    const action = job.diagnosis?.fix_action;
+    const preFix = action && action !== "retry" ? action : null;
+    await runs.start(repoPath, job.new_version, job.old_version, {
+      retrySameVersion: true,
+      preFix,
+    });
+  };
+
+  const handleBootstrap = async () => {
+    setBootstrapping(true);
+    setPreflightError(null);
+    try {
+      await api.releaseBootstrap(repoPath);
+      const next = await api.releasePreflight(repoPath);
+      setPreflight(next);
+    } catch (err) {
+      setPreflightError(String(err));
+    } finally {
+      setBootstrapping(false);
+    }
+  };
+
+  const handleCopyError = () => {
+    if (!job) return;
+    const text = [
+      job.diagnosis?.location ? `Location: ${job.diagnosis.location}` : null,
+      job.diagnosis?.summary ?? job.error,
+      job.run_url ? `Run: ${job.run_url}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopiedError(true);
+        window.setTimeout(() => setCopiedError(false), 1800);
+      })
+      .catch(() => {});
   };
 
   const openExternal = (url: string) => {
@@ -267,6 +317,23 @@ export function ReleaseModal({
                   </div>
                 )}
 
+                {preflight.needs_bootstrap && (
+                  <div className="alert-strip" style={{ justifyContent: "space-between", gap: 10 }}>
+                    <span>
+                      GloriaSetup will be configured automatically on release:{" "}
+                      {preflight.bootstrap_plan.join(" · ")}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => void handleBootstrap()}
+                      disabled={bootstrapping || submitting}
+                    >
+                      {bootstrapping ? "Setting up..." : "Set up now"}
+                    </button>
+                  </div>
+                )}
+
                 {preflight.blockers.length > 0 && (
                   <div className="alert-strip warn">
                     <AlertTriangle size={14} />
@@ -317,6 +384,21 @@ export function ReleaseModal({
                     autoComplete="off"
                   />
                 </div>
+
+                {preflight.has_check_bat && (
+                  <label className="release-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={runLocalCheck}
+                      onChange={(e) => setRunLocalCheck(e.target.checked)}
+                      disabled={preflight.blockers.length > 0 || submitting}
+                    />
+                    <span>
+                      Run <code>gloriaTools/check.bat</code> locally before pushing (catches
+                      build/test errors in seconds)
+                    </span>
+                  </label>
+                )}
               </>
             ) : null}
 
@@ -373,10 +455,33 @@ export function ReleaseModal({
               </div>
             )}
 
-            {job.status === "failed" && job.error && (
-              <div className="alert-strip warn selectable">
-                <AlertTriangle size={14} />
-                <span>{job.error}</span>
+            {job.status === "failed" && (job.diagnosis || job.error) && (
+              <div className="release-diagnosis-card">
+                <div className="release-diagnosis-head">
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    <AlertTriangle size={14} />
+                    <strong className="selectable">
+                      {job.diagnosis?.summary ?? job.error}
+                    </strong>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    {job.diagnosis?.location && (
+                      <span className="mini-tag selectable">{job.diagnosis.location}</span>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={handleCopyError}
+                      title="Copy failure summary"
+                    >
+                      {copiedError ? <Check size={11} /> : <Copy size={11} />}
+                      <span>{copiedError ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
+                </div>
+                {job.error && job.diagnosis?.summary && job.diagnosis.summary !== job.error && (
+                  <div className="release-meta-sub selectable">{job.error}</div>
+                )}
               </div>
             )}
 
@@ -451,7 +556,25 @@ export function ReleaseModal({
                     >
                       New Release
                     </button>
-                    <button type="button" className="btn btn-primary" onClick={onClose}>
+                    {job.status === "failed" && job.diagnosis?.fix_action && (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => void handleRetryOrFix()}
+                      >
+                        <RotateCcw size={12} />
+                        <span>{job.diagnosis.fix_label ?? `Retry v${job.new_version}`}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className={
+                        job.status === "failed" && job.diagnosis?.fix_action
+                          ? "btn"
+                          : "btn btn-primary"
+                      }
+                      onClick={onClose}
+                    >
                       Close
                     </button>
                   </>

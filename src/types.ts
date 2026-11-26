@@ -378,6 +378,9 @@ export interface ReleasePreflight {
   is_gloria_setup: boolean;
   gh_available: boolean;
   dev_self_release: boolean;
+  has_check_bat: boolean;
+  needs_bootstrap: boolean;
+  bootstrap_plan: string[];
   blockers: string[];
 }
 
@@ -386,6 +389,17 @@ export interface ReleaseRequest {
   repo_path: string;
   version: string;
   note?: string | null;
+  run_local_check?: boolean;
+  retry_same_version?: boolean;
+  pre_fix?: string | null;
+}
+
+export interface ReleaseFailureDiagnosis {
+  category: string;
+  summary: string;
+  location: string | null;
+  fix_action: string | null;
+  fix_label: string | null;
 }
 
 export interface ReleaseStarted {
@@ -416,6 +430,7 @@ export interface ReleaseDoneEvent {
   release_url: string | null;
   assets: string[];
   error: string | null;
+  diagnosis: ReleaseFailureDiagnosis | null;
 }
 
 export interface ReleaseLogLine {
@@ -447,4 +462,5 @@ export interface ReleaseJob {
   release_url: string | null;
   assets: string[];
   error: string | null;
+  diagnosis: ReleaseFailureDiagnosis | null;
 }

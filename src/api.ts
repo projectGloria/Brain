@@ -103,6 +103,8 @@ export const api = {
 
   releasePreflight: (repoPath: string) =>
     invoke<ReleasePreflight>("release_preflight_cmd", { repoPath }),
+  releaseBootstrap: (repoPath: string) =>
+    invoke<string[]>("release_bootstrap_cmd", { repoPath }),
   startRelease: (req: ReleaseRequest) =>
     invoke<ReleaseStarted>("start_release_cmd", { req }),
   cancelRelease: (runId: string) =>

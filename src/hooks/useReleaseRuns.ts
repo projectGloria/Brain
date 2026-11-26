@@ -152,6 +152,7 @@ export function useReleaseRuns(onToast: Toast) {
               release_url: payload.release_url ?? job.release_url,
               assets: payload.assets,
               error: payload.error,
+              diagnosis: payload.diagnosis ?? null,
             },
           };
         });
@@ -180,7 +181,17 @@ export function useReleaseRuns(onToast: Toast) {
   }, [flush, queueLine]);
 
   const start = useCallback(
-    async (repoPath: string, version: string, oldVersion: string | null, note?: string) => {
+    async (
+      repoPath: string,
+      version: string,
+      oldVersion: string | null,
+      options?: {
+        note?: string;
+        runLocalCheck?: boolean;
+        retrySameVersion?: boolean;
+        preFix?: string | null;
+      }
+    ) => {
       const runId = `rel-${Date.now().toString(36)}-${seq.current++}`;
       runToRepo.current.set(runId, repoPath);
 
@@ -200,6 +211,7 @@ export function useReleaseRuns(onToast: Toast) {
         release_url: null,
         assets: [],
         error: null,
+        diagnosis: null,
       };
       setJobsByRepo((prev) => ({ ...prev, [repoPath]: job }));
 
@@ -208,7 +220,10 @@ export function useReleaseRuns(onToast: Toast) {
           run_id: runId,
           repo_path: repoPath,
           version,
-          note: note?.trim() || null,
+          note: options?.note?.trim() || null,
+          run_local_check: options?.runLocalCheck ?? false,
+          retry_same_version: options?.retrySameVersion ?? false,
+          pre_fix: options?.preFix ?? null,
         });
         setJobsByRepo((prev) => {
           const cur = prev[repoPath];

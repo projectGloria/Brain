@@ -51,6 +51,9 @@ pub struct ReleasePreflight {
     pub is_gloria_setup: bool,
     pub gh_available: bool,
     pub dev_self_release: bool,
+    pub has_check_bat: bool,
+    pub needs_bootstrap: bool,
+    pub bootstrap_plan: Vec<String>,
     pub blockers: Vec<String>,
 }
 
@@ -60,6 +63,21 @@ pub struct ReleaseRequest {
     pub repo_path: String,
     pub version: String,
     pub note: Option<String>,
+    #[serde(default)]
+    pub run_local_check: bool,
+    #[serde(default)]
+    pub retry_same_version: bool,
+    #[serde(default)]
+    pub pre_fix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ReleaseFailureDiagnosis {
+    pub category: String,
+    pub summary: String,
+    pub location: Option<String>,
+    pub fix_action: Option<String>,
+    pub fix_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,6 +113,7 @@ struct DoneEvent<'a> {
     release_url: Option<String>,
     assets: Vec<String>,
     error: Option<String>,
+    diagnosis: Option<ReleaseFailureDiagnosis>,
 }
 
 struct ReleaseHandle {
@@ -219,11 +238,30 @@ fn run_capture_in_dir(
     Ok((status.and_then(|s| s.code()), stdout, stderr, timed_out))
 }
 
+pub fn clean_log_line(raw: &str) -> String {
+    static CARET_ANSI: OnceLock<Regex> = OnceLock::new();
+    let re = CARET_ANSI.get_or_init(|| {
+        Regex::new(r"\^\[\[[0-9;?]*[A-Za-z]").expect("valid caret ansi regex")
+    });
+    re.replace_all(raw, "").into_owned()
+}
+
+fn push_recent(recent: &Arc<Mutex<Vec<String>>>, line: &str) {
+    if let Ok(mut buf) = recent.lock() {
+        buf.push(line.to_string());
+        if buf.len() > 200 {
+            let drain = buf.len() - 200;
+            buf.drain(0..drain);
+        }
+    }
+}
+
 fn pump_stream<R: Read + Send + 'static>(
     app: AppHandle,
     run_id: String,
     pipe: R,
     stream: &'static str,
+    recent: Arc<Mutex<Vec<String>>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(pipe);
@@ -234,12 +272,13 @@ fn pump_stream<R: Read + Send + 'static>(
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
-            let line = clis::clean_output(&buf);
+            let line = clean_log_line(&clis::clean_output(&buf));
             if line.trim().is_empty() {
                 continue;
             }
             for l in line.split('\n') {
                 if !l.trim().is_empty() {
+                    push_recent(&recent, l);
                     emit_log(&app, &run_id, stream, l.to_string());
                 }
             }
@@ -247,11 +286,13 @@ fn pump_stream<R: Read + Send + 'static>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_streaming(
     app: &AppHandle,
     run_id: &str,
     current_pid: &Arc<Mutex<Option<u32>>>,
     cancelled: &Arc<AtomicBool>,
+    recent: &Arc<Mutex<Vec<String>>>,
     cwd: &Path,
     program: &str,
     args: &[&str],
@@ -275,11 +316,11 @@ fn run_streaming(
     let out_t = child
         .stdout
         .take()
-        .map(|p| pump_stream(app.clone(), run_id.to_string(), p, "out"));
+        .map(|p| pump_stream(app.clone(), run_id.to_string(), p, "out", recent.clone()));
     let err_t = child
         .stderr
         .take()
-        .map(|p| pump_stream(app.clone(), run_id.to_string(), p, "err"));
+        .map(|p| pump_stream(app.clone(), run_id.to_string(), p, "err", recent.clone()));
 
     let status = child
         .wait()
@@ -673,10 +714,9 @@ pub fn preflight(repo_path: &Path) -> Result<ReleasePreflight, String> {
         blockers.push("Not a git repository.".to_string());
     }
 
-    // Workflow status
+    // Workflow status (missing/custom release.yml is auto-bootstrapped via GloriaSetup)
     let wf_path = repo_path.join(".github/workflows/release.yml");
     let workflow_status = if !wf_path.is_file() {
-        blockers.push("Missing .github/workflows/release.yml.".to_string());
         "missing".to_string()
     } else if is_gloria_setup {
         "ready".to_string()
@@ -734,6 +774,22 @@ pub fn preflight(repo_path: &Path) -> Result<ReleasePreflight, String> {
         false
     };
 
+    let has_check_bat = repo_path.join("gloriaTools/check.bat").is_file();
+
+    let mut bootstrap_plan = Vec::new();
+    if !is_gloria_setup {
+        let is_desktop = is_desktop_app(repo_path);
+        if !has_gloria_toml && is_desktop {
+            bootstrap_plan.push("Create gloria.toml from repo manifests".to_string());
+        }
+        if workflow_status == "missing" {
+            bootstrap_plan.push("Create .github/workflows/release.yml (GloriaSetup template)".to_string());
+        } else if workflow_status == "custom" {
+            bootstrap_plan.push("Migrate .github/workflows/release.yml to GloriaSetup template".to_string());
+        }
+    }
+    let needs_bootstrap = !bootstrap_plan.is_empty();
+
     Ok(ReleasePreflight {
         repo_name,
         repo_path: repo_path.to_string_lossy().to_string(),
@@ -749,8 +805,519 @@ pub fn preflight(repo_path: &Path) -> Result<ReleasePreflight, String> {
         is_gloria_setup,
         gh_available,
         dev_self_release,
+        has_check_bat,
+        needs_bootstrap,
+        bootstrap_plan,
         blockers,
     })
+}
+
+const GLORIA_SETUP_TEMPLATE: &str = r#"# projectGloria app release. Copy to .github/workflows/release.yml and edit only the `build` job.
+#
+# Runs only when started on purpose: /gloria-github-release, or `gh workflow run release.yml`.
+# Pushing to main never releases.
+#
+#   check   (shared)  version files agree, version not released yet, gloria.toml valid, picks newest gloria-setup
+#   build   (this repo) builds the app and uploads its files as the artifact `app`
+#   release (shared)  packs with that gloria-setup + dry run (or, without gloria.toml, publishes the files as-is),
+#                     then publishes GitHub Release v<version> with SHA256SUMS.txt
+#
+# The shared jobs live in projectGloria/GloriaSetup and are used from @main, so every release picks up
+# the newest checks and the newest gloria-setup without editing this file.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify everything, but do not publish
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    uses: projectGloria/GloriaSetup/.github/workflows/app-check.yml@main
+
+  build:
+    needs: check
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # ---- App-specific: build, test, and copy the files to install into stage/ ----
+      # Installer apps: stage/ is the app folder (it must contain gloria.toml's main_exe).
+      # Extensions / Android: stage/ holds the files to publish (e.g. MyExt-<version>.zip, MyApp-<version>.apk).
+      - name: Build
+        shell: pwsh
+        run: |
+          throw 'Replace this step with the app build, then copy the result into stage/'
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: app
+          path: stage/
+          if-no-files-found: error
+
+  release:
+    needs: [check, build]
+    uses: projectGloria/GloriaSetup/.github/workflows/app-release.yml@main
+    permissions:
+      contents: write
+    with:
+      version: ${{ needs.check.outputs.version }}
+      installer: ${{ needs.check.outputs.installer == 'true' }}
+      gloria_setup: ${{ needs.check.outputs.gloria_setup }}
+      dry_run: ${{ inputs.dry_run }}
+"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppStack {
+    Tauri,
+    Electron,
+    Rust,
+    Extension,
+    Android,
+    Python,
+    Unknown,
+}
+
+fn detect_app_stack(repo_root: &Path) -> AppStack {
+    if repo_root.join("src-tauri/tauri.conf.json").is_file()
+        || repo_root.join("tauri.conf.json").is_file()
+    {
+        return AppStack::Tauri;
+    }
+    let ext_manifest = repo_root.join("manifest.json");
+    if ext_manifest.is_file()
+        && read_utf8(&ext_manifest)
+            .map(|r| r.contains("manifest_version"))
+            .unwrap_or(false)
+    {
+        return AppStack::Extension;
+    }
+    if repo_root.join("android/app/build.gradle").is_file()
+        || repo_root.join("android/app/build.gradle.kts").is_file()
+        || repo_root.join("app/build.gradle.kts").is_file()
+    {
+        return AppStack::Android;
+    }
+    let pkg_path = repo_root.join("package.json");
+    if pkg_path.is_file() {
+        if let Ok(raw) = read_utf8(&pkg_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                let has_electron = ["dependencies", "devDependencies"].iter().any(|k| {
+                    val.get(k)
+                        .and_then(|d| d.as_object())
+                        .is_some_and(|o| o.contains_key("electron") || o.contains_key("electron-builder"))
+                });
+                if has_electron {
+                    return AppStack::Electron;
+                }
+            }
+        }
+    }
+    if repo_root.join("Cargo.toml").is_file() || repo_root.join("src-tauri/Cargo.toml").is_file() {
+        return AppStack::Rust;
+    }
+    if repo_root.join("pyproject.toml").is_file() || repo_root.join("requirements.txt").is_file() {
+        return AppStack::Python;
+    }
+    AppStack::Unknown
+}
+
+fn is_desktop_app(repo_root: &Path) -> bool {
+    matches!(
+        detect_app_stack(repo_root),
+        AppStack::Tauri | AppStack::Electron | AppStack::Rust | AppStack::Python
+    )
+}
+
+fn find_ico_recursive(dir: &Path, root: &Path, depth: usize, out: &mut Vec<String>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if path.is_dir() {
+            if matches!(
+                name.as_str(),
+                "node_modules" | "target" | ".git" | "dist" | "stage" | ".venv"
+            ) {
+                continue;
+            }
+            find_ico_recursive(&path, root, depth + 1, out);
+        } else if path.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("ico"))
+        {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+}
+
+fn find_best_ico(repo_root: &Path) -> Option<String> {
+    let mut found = Vec::new();
+    find_ico_recursive(repo_root, repo_root, 0, &mut found);
+    if found.is_empty() {
+        return None;
+    }
+    for preferred in ["Gloria.ico", "src-tauri/icons/icon.ico", "icons/icon.ico"] {
+        if let Some(hit) = found.iter().find(|p| p.eq_ignore_ascii_case(preferred)) {
+            return Some(hit.clone());
+        }
+    }
+    found.sort();
+    found.into_iter().next()
+}
+
+fn detect_main_exe(repo_root: &Path, repo_name: &str, stack: AppStack) -> String {
+    if let Ok(raw) = read_utf8(&repo_root.join("gloria.toml")) {
+        if let Ok(val) = raw.parse::<toml::Value>() {
+            if let Some(exe) = val.get("main_exe").and_then(|v| v.as_str()) {
+                if !exe.trim().is_empty() {
+                    return exe.trim().to_string();
+                }
+            }
+        }
+    }
+    for rel in ["src-tauri/Cargo.toml", "Cargo.toml"] {
+        let p = repo_root.join(rel);
+        if p.is_file() {
+            if let Ok(raw) = read_utf8(&p) {
+                if let Ok(val) = raw.parse::<toml::Value>() {
+                    if let Some(bins) = val.get("bin").and_then(|b| b.as_array()) {
+                        if let Some(name) = bins.first().and_then(|b| b.get("name")).and_then(|v| v.as_str()) {
+                            return format!("{name}.exe");
+                        }
+                    }
+                    if let Some(name) = val
+                        .get("package")
+                        .and_then(|pkg| pkg.get("name"))
+                        .and_then(|v| v.as_str())
+                    {
+                        return format!("{name}.exe");
+                    }
+                }
+            }
+        }
+    }
+    if stack == AppStack::Electron {
+        if let Ok(raw) = read_utf8(&repo_root.join("package.json")) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(prod) = val
+                    .get("build")
+                    .and_then(|b| b.get("productName"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| val.get("name").and_then(|v| v.as_str()))
+                {
+                    if !prod.trim().is_empty() {
+                        return format!("{}.exe", prod.trim());
+                    }
+                }
+            }
+        }
+    }
+    format!("{repo_name}.exe")
+}
+
+fn detect_description(repo_root: &Path, repo_name: &str) -> String {
+    if let Ok(raw) = read_utf8(&repo_root.join("package.json")) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(desc) = val.get("description").and_then(|v| v.as_str()) {
+                if !desc.trim().is_empty() {
+                    return desc.trim().to_string();
+                }
+            }
+        }
+    }
+    for rel in ["src-tauri/Cargo.toml", "Cargo.toml"] {
+        if let Ok(raw) = read_utf8(&repo_root.join(rel)) {
+            if let Ok(val) = raw.parse::<toml::Value>() {
+                if let Some(desc) = val
+                    .get("package")
+                    .and_then(|p| p.get("description"))
+                    .and_then(|v| v.as_str())
+                {
+                    if !desc.trim().is_empty() {
+                        return desc.trim().to_string();
+                    }
+                }
+            }
+        }
+    }
+    format!("{repo_name} desktop application")
+}
+
+fn detect_tauri_identifier(repo_root: &Path) -> Option<String> {
+    for rel in ["src-tauri/tauri.conf.json", "tauri.conf.json"] {
+        let p = repo_root.join(rel);
+        if p.is_file() {
+            if let Ok(raw) = read_utf8(&p) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if let Some(id) = val.get("identifier").and_then(|v| v.as_str()) {
+                        if !id.trim().is_empty() {
+                            return Some(id.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn build_steps_for_stack(repo_root: &Path, repo_name: &str, main_exe: &str, stack: AppStack) -> Result<String, String> {
+    let has_pkg_lock = repo_root.join("package-lock.json").is_file();
+    let has_cargo_lock = repo_root.join("src-tauri/Cargo.lock").is_file() || repo_root.join("Cargo.lock").is_file();
+    let has_tsconfig = repo_root.join("tsconfig.json").is_file();
+
+    match stack {
+        AppStack::Tauri => {
+            let install_cmd = if has_pkg_lock { "npm ci" } else { "npm install" };
+            let test_cmd = if has_cargo_lock {
+                "cargo test --manifest-path src-tauri/Cargo.toml --locked"
+            } else {
+                "cargo test --manifest-path src-tauri/Cargo.toml"
+            };
+            let ts_line = if has_tsconfig { "          npx tsc --noEmit\n" } else { "" };
+            Ok(format!(
+                r#"      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: "src-tauri -> target"
+          cache-on-failure: true
+
+      - name: Install dependencies
+        shell: pwsh
+        run: {install_cmd}
+
+      - name: Run frontend and Rust checks
+        shell: pwsh
+        run: |
+{ts_line}          {test_cmd}
+
+      - name: Build Tauri release binary
+        shell: pwsh
+        run: npx tauri build --no-bundle
+
+      - name: Stage application payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path stage) {{ Remove-Item -Recurse -Force stage }}
+          New-Item -ItemType Directory -Path stage | Out-Null
+          $bin = "src-tauri\target\release\{main_exe}"
+          if (-not (Test-Path $bin)) {{ throw "Built binary not found: $bin" }}
+          Copy-Item $bin "stage\{main_exe}""#
+            ))
+        }
+        AppStack::Electron => {
+            let install_cmd = if has_pkg_lock { "npm ci" } else { "npm install" };
+            Ok(format!(
+                r#"      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: {install_cmd}
+
+      - name: Build Electron app
+        shell: pwsh
+        run: npx electron-builder --win --x64 --dir --publish never
+
+      - name: Stage application payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path stage) {{ Remove-Item -Recurse -Force stage }}
+          New-Item -ItemType Directory -Path stage | Out-Null
+          Copy-Item "dist\win-unpacked\*" "stage\" -Recurse -Force"#
+            ))
+        }
+        AppStack::Rust => {
+            let locked = if has_cargo_lock { " --locked" } else { "" };
+            Ok(format!(
+                r#"      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-on-failure: true
+
+      - name: Run Rust tests
+        shell: pwsh
+        run: cargo test{locked}
+
+      - name: Build release binary
+        shell: pwsh
+        run: cargo build --release{locked}
+
+      - name: Stage application payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path stage) {{ Remove-Item -Recurse -Force stage }}
+          New-Item -ItemType Directory -Path stage | Out-Null
+          $bin = "target\release\{main_exe}"
+          if (-not (Test-Path $bin)) {{ throw "Built binary not found: $bin" }}
+          Copy-Item $bin "stage\{main_exe}""#
+            ))
+        }
+        AppStack::Extension => {
+            let has_pkg = repo_root.join("package.json").is_file();
+            let build_step = if has_pkg {
+                let install_cmd = if has_pkg_lock { "npm ci" } else { "npm install" };
+                format!(
+                    r#"      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Build extension
+        shell: pwsh
+        run: |
+          {install_cmd}
+          npm run build
+"#
+                )
+            } else {
+                String::new()
+            };
+            let src_dir = if repo_root.join("dist").is_dir() || has_pkg { "dist\\*" } else { "*" };
+            Ok(format!(
+                r#"{build_step}      - name: Package extension
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path stage) {{ Remove-Item -Recurse -Force stage }}
+          New-Item -ItemType Directory -Path stage | Out-Null
+          Compress-Archive -Path "{src_dir}" -DestinationPath "stage\{repo_name}-$env:VERSION.zip" -Force"#
+            ))
+        }
+        other => Err(format!(
+            "Cannot auto-generate .github/workflows/release.yml for stack '{other:?}' yet. Add .github/workflows/release.yml manually."
+        )),
+    }
+}
+
+pub fn bootstrap_gloria_setup(
+    repo_root: &Path,
+    version_override: Option<&str>,
+) -> Result<Vec<String>, String> {
+    if !repo_root.is_dir() {
+        return Err(format!("Repository '{}' does not exist.", repo_root.display()));
+    }
+    if is_gloria_setup_repo(repo_root) {
+        return Ok(Vec::new());
+    }
+
+    let repo_name = repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("App")
+        .to_string();
+    let stack = detect_app_stack(repo_root);
+    let main_exe = detect_main_exe(repo_root, &repo_name, stack);
+    let mut created = Vec::new();
+
+    // 1. gloria.toml (desktop apps only)
+    let gloria_path = repo_root.join("gloria.toml");
+    if !gloria_path.is_file() && is_desktop_app(repo_root) {
+        let version = version_override
+            .map(normalize_version)
+            .filter(|v| !v.is_empty())
+            .or_else(|| detect_version_files(repo_root, false).into_iter().next().map(|(_, v)| v))
+            .unwrap_or_else(|| "0.1.0".to_string());
+        let desc = detect_description(repo_root, &repo_name).replace('"', "\\\"");
+        let mut lines = vec![
+            format!("id = \"{repo_name}\""),
+            format!("name = \"{repo_name}\""),
+            format!("version = \"{version}\""),
+            format!("main_exe = \"{main_exe}\""),
+        ];
+        if let Some(ico) = find_best_ico(repo_root) {
+            lines.push(format!("icon = \"{ico}\""));
+        }
+        lines.push("accent = \"#FF6B00\"".to_string());
+        lines.push(format!("description = \"{desc}\""));
+        if stack == AppStack::Tauri {
+            lines.push("needs_webview2 = true".to_string());
+        }
+        let mut data_folders = vec![format!("'%APPDATA%\\{repo_name}'")];
+        if let Some(ident) = detect_tauri_identifier(repo_root) {
+            data_folders.push(format!("'%LOCALAPPDATA%\\{ident}'"));
+        }
+        lines.push(format!("data_folders = [{}]", data_folders.join(", ")));
+        let content = format!("{}\n", lines.join("\n"));
+        write_utf8_no_bom(&gloria_path, &content)?;
+        created.push("gloria.toml".to_string());
+    }
+
+    // 2. .github/workflows/release.yml
+    let wf_path = repo_root.join(".github/workflows/release.yml");
+    let needs_wf = !wf_path.is_file()
+        || !read_utf8(&wf_path)
+            .map(|r| r.contains("GloriaSetup/.github/workflows/app-check.yml@main"))
+            .unwrap_or(false);
+    if needs_wf {
+        let template = repo_root
+            .parent()
+            .map(|p| p.join("GloriaSetup/templates/release.yml"))
+            .filter(|p| p.is_file())
+            .and_then(|p| read_utf8(&p).ok())
+            .unwrap_or_else(|| GLORIA_SETUP_TEMPLATE.to_string());
+
+        let build_steps = build_steps_for_stack(repo_root, &repo_name, &main_exe, stack)?;
+        let placeholder_re = Regex::new(
+            r"(?ms)^      - name: Build\r?\n        shell: pwsh\r?\n        run: \|\r?\n          throw 'Replace this step with the app build, then copy the result into stage/'",
+        )
+        .map_err(|e| e.to_string())?;
+        if !placeholder_re.is_match(&template) {
+            return Err("Could not locate placeholder Build step in GloriaSetup template.".to_string());
+        }
+        let rendered = placeholder_re
+            .replace(&template, build_steps.as_str())
+            .into_owned();
+        if let Some(parent) = wf_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed creating .github/workflows/: {e}"))?;
+        }
+        write_utf8_no_bom(&wf_path, &rendered)?;
+        created.push(".github/workflows/release.yml".to_string());
+    }
+
+    Ok(created)
 }
 
 pub fn bump_version_files(
@@ -1025,6 +1592,116 @@ fn fetch_release_details(repo: &Path, tag: &str) -> (Option<String>, Vec<String>
     (url, assets)
 }
 
+pub fn diagnose_failure(error: &str, log_lines: &[String], version: &str) -> ReleaseFailureDiagnosis {
+    let joined = format!("{}\n{}", log_lines.join("\n"), error);
+    let lower = joined.to_ascii_lowercase();
+
+    static LOC_RE: OnceLock<Regex> = OnceLock::new();
+    let loc_re = LOC_RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)([A-Za-z0-9_./\\-]+\.(?:ps1|rs|ts|tsx|js|mjs|json|toml|yml|yaml|py|cs|gradle|kts)):(\d+)",
+        )
+        .expect("valid location regex")
+    });
+    let location = loc_re.captures(&joined).map(|c| {
+        let path = c[1].replace('\\', "/");
+        let short = if let Some(idx) = path.rfind("/scripts/") {
+            &path[idx + 1..]
+        } else if let Some(idx) = path.rfind("/src") {
+            &path[idx + 1..]
+        } else {
+            &path
+        };
+        format!("{short}:{}", &c[2])
+    });
+
+    if lower.contains("already exists on github") || lower.contains("already released") {
+        return ReleaseFailureDiagnosis {
+            category: "already_released".to_string(),
+            summary: format!("Release v{version} already exists on GitHub. Pick a newer version."),
+            location,
+            fix_action: None,
+            fix_label: None,
+        };
+    }
+
+    if lower.contains("cargo fmt failed") || lower.contains("diff in ") {
+        return ReleaseFailureDiagnosis {
+            category: "cargo_fmt".to_string(),
+            summary: "Rust formatting check (cargo fmt) failed.".to_string(),
+            location,
+            fix_action: Some("cargo_fmt".to_string()),
+            fix_label: Some("Run cargo fmt & Retry".to_string()),
+        };
+    }
+
+    if lower.contains("cannot update the lock file")
+        || lower.contains("cargo.lock needs to be updated")
+        || (lower.contains("--locked") && lower.contains("cargo"))
+        || lower.contains("npm ci` can only install packages when your package.json and package-lock.json")
+    {
+        return ReleaseFailureDiagnosis {
+            category: "lockfile".to_string(),
+            summary: "Lockfile is out of sync with the manifest (--locked / npm ci failed).".to_string(),
+            location,
+            fix_action: Some("refresh_lockfiles".to_string()),
+            fix_label: Some("Refresh lockfiles & Retry".to_string()),
+        };
+    }
+
+    if lower.contains("version mismatch") || lower.contains("version files disagree") {
+        return ReleaseFailureDiagnosis {
+            category: "version_mismatch".to_string(),
+            summary: "Version manifests do not agree.".to_string(),
+            location,
+            fix_action: Some("resync_versions".to_string()),
+            fix_label: Some("Re-sync versions & Retry".to_string()),
+        };
+    }
+
+    if lower.contains("gloria-setup --check failed") {
+        return ReleaseFailureDiagnosis {
+            category: "gloria_toml".to_string(),
+            summary: "gloria.toml validation failed. Fix gloria.toml and retry.".to_string(),
+            location,
+            fix_action: None,
+            fix_label: None,
+        };
+    }
+
+    let best_line = log_lines
+        .iter()
+        .rev()
+        .find(|l| {
+            let t = l.trim();
+            t.contains("Exception:")
+                || t.contains("throw '")
+                || t.contains("error[")
+                || t.contains("FAILED")
+                || t.contains("##[error]")
+        })
+        .map(|l| {
+            let t = l.trim();
+            if let Some((_, rest)) = t.split_once("Exception:") {
+                return rest.trim().trim_matches('"').to_string();
+            }
+            if let Some((_, rest)) = t.split_once("##[error]") {
+                return rest.trim().to_string();
+            }
+            t.to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| error.to_string());
+
+    ReleaseFailureDiagnosis {
+        category: "ci_error".to_string(),
+        summary: best_line,
+        location,
+        fix_action: Some("retry".to_string()),
+        fix_label: Some(format!("Retry v{version}")),
+    }
+}
+
 pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, String> {
     let run_id = req.run_id.trim().to_string();
     if run_id.is_empty() {
@@ -1051,6 +1728,9 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
     }
 
     let note = req.note.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let run_local_check = req.run_local_check;
+    let retry_same_version = req.retry_same_version;
+    let pre_fix = req.pre_fix.clone();
     let version_ret = new_version.clone();
     let run_id_ret = run_id.clone();
 
@@ -1060,15 +1740,29 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
         let mut release_url: Option<String> = None;
         let mut assets: Vec<String> = Vec::new();
         let mut current_step = "preflight";
+        let recent = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let result: Result<(), String> = (|| {
             // 1. Preflight
             emit_step(&app, &run_id, "preflight", "running", None);
             emit_log(&app, &run_id, "info", "Running preflight checks...".to_string());
-            let pre = preflight(&repo)?;
+            let mut pre = preflight(&repo)?;
             old_version = pre.current_version.clone();
             if !pre.blockers.is_empty() {
                 return Err(pre.blockers.join(" "));
+            }
+            if pre.needs_bootstrap && !pre.is_gloria_setup {
+                emit_log(
+                    &app,
+                    &run_id,
+                    "info",
+                    "Configuring GloriaSetup (gloria.toml / release.yml)...".to_string(),
+                );
+                let created = bootstrap_gloria_setup(&repo, Some(&new_version))?;
+                for f in &created {
+                    emit_log(&app, &run_id, "info", format!("Generated {f}"));
+                }
+                pre.has_gloria_toml = repo.join("gloria.toml").is_file();
             }
             let tag = format!("v{new_version}");
             if let Ok((Some(0), _, _, false)) =
@@ -1087,6 +1781,69 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                     new_version
                 )),
             );
+
+            // Optional deterministic pre-fix before bumping/committing
+            if let Some(ref fix) = pre_fix {
+                match fix.as_str() {
+                    "cargo_fmt" => {
+                        emit_log(&app, &run_id, "info", "Applying deterministic fix: cargo fmt --all...".to_string());
+                        let fmt_dir = if repo.join("src-tauri/Cargo.toml").is_file() {
+                            repo.join("src-tauri")
+                        } else {
+                            repo.clone()
+                        };
+                        let code = run_streaming(
+                            &app,
+                            &run_id,
+                            &current_pid,
+                            &cancelled,
+                            &recent,
+                            &fmt_dir,
+                            "cargo",
+                            &["fmt", "--all"],
+                        )?;
+                        if code != 0 {
+                            return Err(format!("cargo fmt --all failed (exit {code})."));
+                        }
+                    }
+                    "refresh_lockfiles" => {
+                        emit_log(&app, &run_id, "info", "Applying deterministic fix: refreshing lockfiles...".to_string());
+                        for dir in [&repo, &repo.join("src-tauri")] {
+                            if dir.join("Cargo.lock").is_file() {
+                                let code = run_streaming(
+                                    &app,
+                                    &run_id,
+                                    &current_pid,
+                                    &cancelled,
+                                    &recent,
+                                    dir,
+                                    "cargo",
+                                    &["update", "--workspace", "--offline"],
+                                )?;
+                                if code != 0 {
+                                    return Err(format!("cargo update --workspace --offline failed (exit {code})."));
+                                }
+                            }
+                        }
+                        if repo.join("package-lock.json").is_file() {
+                            let code = run_streaming(
+                                &app,
+                                &run_id,
+                                &current_pid,
+                                &cancelled,
+                                &recent,
+                                &repo,
+                                "npm",
+                                &["install", "--package-lock-only"],
+                            )?;
+                            if code != 0 {
+                                return Err(format!("npm install --package-lock-only failed (exit {code})."));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
 
             // 2. Bump
             current_step = "bump";
@@ -1113,31 +1870,53 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                 Some(format!("{} file(s)", bumped.len())),
             );
 
-            // 3. Validate gloria.toml
+            // 3. Validate gloria.toml (+ optional local check.bat)
             current_step = "validate";
-            if pre.has_gloria_toml && !pre.is_gloria_setup {
+            let check_bat = repo.join("gloriaTools/check.bat");
+            let has_gloria_check = pre.has_gloria_toml && !pre.is_gloria_setup;
+            let has_local_check = run_local_check && check_bat.is_file();
+            if has_gloria_check || has_local_check {
                 emit_step(&app, &run_id, "validate", "running", None);
-                let code = run_streaming(
-                    &app,
-                    &run_id,
-                    &current_pid,
-                    &cancelled,
-                    &repo,
-                    "npx",
-                    &[
-                        "--yes",
-                        "gloria-setup@latest",
-                        "--check",
-                        "--manifest",
-                        "gloria.toml",
-                        "--version",
-                        &new_version,
-                    ],
-                )?;
-                if code != 0 {
-                    return Err(format!("gloria-setup --check failed (exit {code})."));
+                if has_gloria_check {
+                    let code = run_streaming(
+                        &app,
+                        &run_id,
+                        &current_pid,
+                        &cancelled,
+                        &recent,
+                        &repo,
+                        "npx",
+                        &[
+                            "--yes",
+                            "gloria-setup@latest",
+                            "--check",
+                            "--manifest",
+                            "gloria.toml",
+                            "--version",
+                            &new_version,
+                        ],
+                    )?;
+                    if code != 0 {
+                        return Err(format!("gloria-setup --check failed (exit {code})."));
+                    }
                 }
-                emit_step(&app, &run_id, "validate", "done", Some("gloria.toml valid".to_string()));
+                if has_local_check {
+                    emit_log(&app, &run_id, "info", "Running local gloriaTools/check.bat...".to_string());
+                    let code = run_streaming(
+                        &app,
+                        &run_id,
+                        &current_pid,
+                        &cancelled,
+                        &recent,
+                        &repo,
+                        "cmd.exe",
+                        &["/C", "gloriaTools\\check.bat"],
+                    )?;
+                    if code != 0 {
+                        return Err(format!("gloriaTools/check.bat failed (exit {code})."));
+                    }
+                }
+                emit_step(&app, &run_id, "validate", "done", Some("Validated".to_string()));
             } else {
                 emit_step(&app, &run_id, "validate", "skipped", Some("No gloria.toml".to_string()));
             }
@@ -1145,22 +1924,32 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
             // 4. Commit & push
             current_step = "push";
             emit_step(&app, &run_id, "push", "running", None);
-            let add_code = run_streaming(&app, &run_id, &current_pid, &cancelled, &repo, "git", &["add", "-A"])?;
+            let add_code = run_streaming(&app, &run_id, &current_pid, &cancelled, &recent, &repo, "git", &["add", "-A"])?;
             if add_code != 0 {
                 return Err(format!("git add -A failed (exit {add_code})."));
             }
 
             let diff_quiet = run_capture_in_dir(&repo, "git", &["diff", "--cached", "--quiet"], SHORT_TIMEOUT)?;
             if diff_quiet.0 != Some(0) {
-                let commit_msg = match &note {
-                    Some(n) => format!("Release {new_version}: {}.", n.trim_end_matches('.')),
-                    None => format!("Release {new_version}."),
+                let commit_msg = if retry_same_version {
+                    match pre_fix.as_deref() {
+                        Some("cargo_fmt") => format!("Fix formatting so the {new_version} release builds."),
+                        Some("refresh_lockfiles") => format!("Fix lockfiles so the {new_version} release builds."),
+                        Some("resync_versions") => format!("Sync version manifests so the {new_version} release builds."),
+                        _ => format!("Fix release build for {new_version}."),
+                    }
+                } else {
+                    match &note {
+                        Some(n) => format!("Release {new_version}: {}.", n.trim_end_matches('.')),
+                        None => format!("Release {new_version}."),
+                    }
                 };
                 let c_code = run_streaming(
                     &app,
                     &run_id,
                     &current_pid,
                     &cancelled,
+                    &recent,
                     &repo,
                     "git",
                     &["commit", "-m", &commit_msg],
@@ -1177,6 +1966,7 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                 &run_id,
                 &current_pid,
                 &cancelled,
+                &recent,
                 &repo,
                 "git",
                 &["push", "origin", "main"],
@@ -1201,6 +1991,7 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                 &run_id,
                 &current_pid,
                 &cancelled,
+                &recent,
                 &repo,
                 "gh",
                 &["workflow", "run", "release.yml", "--ref", "main"],
@@ -1239,6 +2030,7 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                 &run_id,
                 &current_pid,
                 &cancelled,
+                &recent,
                 &repo,
                 "gh",
                 &["run", "watch", &wf_id_str, "--exit-status", "--interval", "15"],
@@ -1253,7 +2045,9 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                     let lines: Vec<&str> = log_out.lines().collect();
                     let tail_start = lines.len().saturating_sub(60);
                     for l in &lines[tail_start..] {
-                        emit_log(&app, &run_id, "err", (*l).to_string());
+                        let cleaned = clean_log_line(l);
+                        push_recent(&recent, &cleaned);
+                        emit_log(&app, &run_id, "err", cleaned);
                     }
                 }
                 return Err(format!("GitHub Actions run #{wf_run_id} failed (exit {watch_code})."));
@@ -1304,10 +2098,17 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                         release_url,
                         assets,
                         error: None,
+                        diagnosis: None,
                     },
                 );
             }
             Err(err) => {
+                let diag = if is_cancelled {
+                    None
+                } else {
+                    let snapshot = recent.lock().map(|b| b.clone()).unwrap_or_default();
+                    Some(diagnose_failure(&err, &snapshot, &new_version))
+                };
                 emit_step(&app, &run_id, current_step, "failed", Some(err.clone()));
                 emit_log(&app, &run_id, "err", err.clone());
                 let _ = app.emit(
@@ -1322,6 +2123,7 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                         release_url,
                         assets,
                         error: Some(err),
+                        diagnosis: diag,
                     },
                 );
             }
@@ -1460,6 +2262,85 @@ mod tests {
         assert!(read_utf8(&dir.join("Cargo.toml")).unwrap().contains("version = \"0.9.1\""));
         assert!(read_utf8(&dir.join("npm/package.json")).unwrap().contains("\"0.9.1\""));
         assert!(read_utf8(&dir.join("README.md")).unwrap().contains("GloriaSetup@v0.9.1"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strips_caret_escaped_ansi_codes() {
+        let raw = "^[[31;1m^[[36;1m 115 | ^[[0m  throw 'Defender scan must precede'^[[0m";
+        assert_eq!(
+            clean_log_line(raw),
+            " 115 |   throw 'Defender scan must precede'"
+        );
+    }
+
+    #[test]
+    fn diagnoses_known_and_custom_ci_failures() {
+        let fmt_diag = diagnose_failure(
+            "GitHub Actions run #1 failed",
+            &["Diff in src/main.rs at line 12:".to_string(), "cargo fmt failed".to_string()],
+            "0.2.0",
+        );
+        assert_eq!(fmt_diag.category, "cargo_fmt");
+        assert_eq!(fmt_diag.fix_action.as_deref(), Some("cargo_fmt"));
+
+        let navalia_diag = diagnose_failure(
+            "GitHub Actions run #45886567484 failed (exit 1).",
+            &[
+                "Exception: D:\\a\\Navalia\\Navalia\\scripts\\Test-ReleaseAntivirus.ps1:115".to_string(),
+                "Defender scan must precede uploading the staged app artifact.".to_string(),
+            ],
+            "0.2.0",
+        );
+        assert_eq!(navalia_diag.category, "ci_error");
+        assert_eq!(navalia_diag.location.as_deref(), Some("scripts/Test-ReleaseAntivirus.ps1:115"));
+        assert_eq!(navalia_diag.fix_action.as_deref(), Some("retry"));
+    }
+
+    #[test]
+    fn bootstraps_tauri_repo_with_gloria_toml_and_release_yml() {
+        let dir = make_temp_dir("bootstrap");
+        fs::create_dir_all(dir.join("src-tauri/icons")).unwrap();
+        fs::write(dir.join("src-tauri/icons/icon.ico"), "ico").unwrap();
+        fs::write(
+            dir.join("package.json"),
+            r#"{"name":"festina-lente","version":"0.1.0","description":"Focus timer"}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        fs::write(
+            dir.join("src-tauri/tauri.conf.json"),
+            r#"{"productName":"FestinaLente","version":"0.1.0","identifier":"com.projectgloria.festinalente"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src-tauri/Cargo.toml"),
+            "[package]\nname = \"festina-lente\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let created = bootstrap_gloria_setup(&dir, Some("0.1.1")).unwrap();
+        assert_eq!(
+            created,
+            vec![
+                "gloria.toml".to_string(),
+                ".github/workflows/release.yml".to_string()
+            ]
+        );
+
+        let toml_raw = read_utf8(&dir.join("gloria.toml")).unwrap();
+        assert!(toml_raw.contains("version = \"0.1.1\""));
+        assert!(toml_raw.contains("main_exe = \"festina-lente.exe\""));
+        assert!(toml_raw.contains("icon = \"src-tauri/icons/icon.ico\""));
+        assert!(toml_raw.contains("needs_webview2 = true"));
+        assert!(toml_raw.contains("'%APPDATA%\\"));
+        assert!(toml_raw.contains("'%LOCALAPPDATA%\\com.projectgloria.festinalente'"));
+
+        let wf_raw = read_utf8(&dir.join(".github/workflows/release.yml")).unwrap();
+        assert!(wf_raw.contains("GloriaSetup/.github/workflows/app-check.yml@main"));
+        assert!(wf_raw.contains("GloriaSetup/.github/workflows/app-release.yml@main"));
+        assert!(wf_raw.contains("festina-lente.exe"));
 
         let _ = fs::remove_dir_all(&dir);
     }
