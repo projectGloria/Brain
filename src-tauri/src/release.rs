@@ -172,6 +172,7 @@ fn build_cmd(program: &str, args: &[&str], cwd: &Path) -> Command {
     };
 
     cmd.current_dir(cwd)
+        .env("CI", "true")
         .env("NO_COLOR", "1")
         .env("FORCE_COLOR", "0")
         .stdin(Stdio::null());
@@ -1087,6 +1088,11 @@ fn build_steps_for_stack(repo_root: &Path, repo_name: &str, main_exe: &str, stac
     let has_pkg_lock = repo_root.join("package-lock.json").is_file();
     let has_cargo_lock = repo_root.join("src-tauri/Cargo.lock").is_file() || repo_root.join("Cargo.lock").is_file();
     let has_tsconfig = repo_root.join("tsconfig.json").is_file();
+    let npm_cache_line = if has_pkg_lock {
+        "\n          cache: \"npm\""
+    } else {
+        ""
+    };
 
     match stack {
         AppStack::Tauri => {
@@ -1099,10 +1105,9 @@ fn build_steps_for_stack(repo_root: &Path, repo_name: &str, main_exe: &str, stac
             let ts_line = if has_tsconfig { "          npx tsc --noEmit\n" } else { "" };
             Ok(format!(
                 r#"      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: "22"{npm_cache_line}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
@@ -1141,10 +1146,9 @@ fn build_steps_for_stack(repo_root: &Path, repo_name: &str, main_exe: &str, stac
             let install_cmd = if has_pkg_lock { "npm ci" } else { "npm install" };
             Ok(format!(
                 r#"      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: "22"{npm_cache_line}
 
       - name: Install dependencies
         shell: pwsh
@@ -1199,10 +1203,9 @@ fn build_steps_for_stack(repo_root: &Path, repo_name: &str, main_exe: &str, stac
                 let install_cmd = if has_pkg_lock { "npm ci" } else { "npm install" };
                 format!(
                     r#"      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: "22"{npm_cache_line}
 
       - name: Build extension
         shell: pwsh
@@ -1260,15 +1263,16 @@ pub fn bootstrap_gloria_setup(
             .or_else(|| detect_version_files(repo_root, false).into_iter().next().map(|(_, v)| v))
             .unwrap_or_else(|| "0.1.0".to_string());
         let desc = detect_description(repo_root, &repo_name).replace('"', "\\\"");
+        let ico = find_best_ico(repo_root).ok_or_else(|| {
+            "No .ico icon found in repository. Add an .ico file (e.g. Gloria.ico or src-tauri/icons/icon.ico) so GloriaSetup can pack the installer.".to_string()
+        })?;
         let mut lines = vec![
             format!("id = \"{repo_name}\""),
             format!("name = \"{repo_name}\""),
             format!("version = \"{version}\""),
             format!("main_exe = \"{main_exe}\""),
+            format!("icon = \"{ico}\""),
         ];
-        if let Some(ico) = find_best_ico(repo_root) {
-            lines.push(format!("icon = \"{ico}\""));
-        }
         lines.push("accent = \"#FF6B00\"".to_string());
         lines.push(format!("description = \"{desc}\""));
         if stack == AppStack::Tauri {

@@ -13,9 +13,26 @@ import {
   Play,
   FilePlus2,
 } from "lucide-react";
+import { HoverTip } from "../components/HoverTip";
 import type { RepoStatus, ToastItem } from "../types";
 
 const INIT_COMMAND = "/gloria-init-brain";
+
+const STATUS_EXPLANATIONS: Record<string, string> = {
+  "UP TO DATE":
+    "AGENTS.md carries the current master brain-sync hash, stays within 120 lines, and matches your local rules.",
+  "BRAIN DRIFT":
+    "Your master rules in ~/.brain changed since AGENTS.md was last generated. Run /gloria-init-brain in this repo to refresh AGENTS.md.",
+  "REPO DRIFT":
+    "This repo's local .brain/*.md copies differ from ~/.brain. Click Sync .brain/ to mirror the latest master rules.",
+  "OVER BUDGET":
+    "AGENTS.md exceeds the 120-line budget. Trim it or re-run /gloria-init-brain so agents load rules reliably.",
+  "NO MARKER":
+    "AGENTS.md exists but is missing its <!-- brain-sync: ... --> fingerprint. Run /gloria-init-brain to add it.",
+  "NO AGENTS.MD":
+    "This repository does not have an AGENTS.md file yet. Run /gloria-init-brain if you want Brain rules active here.",
+  ERROR: "Brain could not inspect this repository path. Check that the folder exists on disk.",
+};
 
 interface DashboardViewProps {
   repos: RepoStatus[];
@@ -179,22 +196,30 @@ export function DashboardView({
           <span className="kpi-label">Total Repos</span>
           <span className="kpi-value">{stats.total}</span>
         </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Up to Date</span>
-          <span className="kpi-value green">{stats.upToDate}</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Brain Drift</span>
-          <span className="kpi-value accent">{stats.brainDrift}</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Repo Drift</span>
-          <span className="kpi-value amber">{stats.repoDrift}</span>
-        </div>
-        <div className="kpi-card" title="Every repo that is not up to date, excluding repos without AGENTS.md">
-          <span className="kpi-label">Needs Attention</span>
-          <span className="kpi-value red">{stats.attention}</span>
-        </div>
+        <HoverTip text="Repos whose AGENTS.md and .brain/ match the current master fingerprint.">
+          <div className="kpi-card">
+            <span className="kpi-label">Up to Date</span>
+            <span className="kpi-value green">{stats.upToDate}</span>
+          </div>
+        </HoverTip>
+        <HoverTip text={STATUS_EXPLANATIONS["BRAIN DRIFT"]}>
+          <div className="kpi-card">
+            <span className="kpi-label">Brain Drift</span>
+            <span className="kpi-value accent">{stats.brainDrift}</span>
+          </div>
+        </HoverTip>
+        <HoverTip text={STATUS_EXPLANATIONS["REPO DRIFT"]}>
+          <div className="kpi-card">
+            <span className="kpi-label">Repo Drift</span>
+            <span className="kpi-value amber">{stats.repoDrift}</span>
+          </div>
+        </HoverTip>
+        <HoverTip text="Every repo that is not up to date, excluding repos without AGENTS.md.">
+          <div className="kpi-card">
+            <span className="kpi-label">Needs Attention</span>
+            <span className="kpi-value red">{stats.attention}</span>
+          </div>
+        </HoverTip>
       </div>
 
       <div className="toolbar">
@@ -285,34 +310,43 @@ export function DashboardView({
                   <div className="repo-name-row">
                     <span className="repo-name">{repo.repo}</span>
                     {repo.is_brain_repo && (
-                      <span className="mini-tag accent">MASTER REPO</span>
+                      <HoverTip text="Canonical source repository for your master Brain rules and skills.">
+                        <span className="mini-tag accent">MASTER REPO</span>
+                      </HoverTip>
                     )}
                     {repo.is_git_repo && (
-                      <span className="mini-tag" title="Git repository">
-                        <GitBranch
-                          size={10}
-                          style={{ verticalAlign: "middle", marginRight: 3 }}
-                        />
-                        git
-                      </span>
+                      <HoverTip text="Git repository detected (.git directory present).">
+                        <span className="mini-tag">
+                          <GitBranch
+                            size={10}
+                            style={{ verticalAlign: "middle", marginRight: 3 }}
+                          />
+                          git
+                        </span>
+                      </HoverTip>
                     )}
                     {repo.has_project_brain && (
-                      <span className="mini-tag">.brain/</span>
+                      <HoverTip text="Local .brain/ playbook folder mirrored from ~/.brain.">
+                        <span className="mini-tag">.brain/</span>
+                      </HoverTip>
                     )}
                     {repo.has_claude_md && (
-                      <span className="mini-tag">CLAUDE.md</span>
+                      <HoverTip text="Contains a CLAUDE.md instruction file for Claude Code.">
+                        <span className="mini-tag">CLAUDE.md</span>
+                      </HoverTip>
                     )}
                     {repo.is_git_repo && (gi === "MISSING" || gi === "DIFFERS") && (
-                      <span
-                        className="mini-tag drift-file"
-                        title={
+                      <HoverTip
+                        text={
                           gi === "MISSING"
-                            ? "No .gitignore in this repo"
-                            : ".gitignore differs from the shared draft"
+                            ? "No .gitignore in this repo. Click + .gitignore to write the shared draft."
+                            : ".gitignore differs from your shared template in Brain."
                         }
                       >
-                        .gitignore {gi === "MISSING" ? "missing" : "differs"}
-                      </span>
+                        <span className="mini-tag drift-file">
+                          .gitignore {gi === "MISSING" ? "missing" : "differs"}
+                        </span>
+                      </HoverTip>
                     )}
                   </div>
 
@@ -364,10 +398,12 @@ export function DashboardView({
                 </div>
 
                 <div className="repo-status-col">
-                  <span className={`status-badge ${badgeClass(repo.status)}`}>
-                    <StatusIcon status={repo.status} />
-                    <span>{repo.status}</span>
-                  </span>
+                  <HoverTip text={STATUS_EXPLANATIONS[repo.status] ?? repo.message}>
+                    <span className={`status-badge ${badgeClass(repo.status)}`}>
+                      <StatusIcon status={repo.status} />
+                      <span>{repo.status}</span>
+                    </span>
+                  </HoverTip>
                   <span className="repo-status-msg" title={repo.message}>
                     {repo.message}
                   </span>

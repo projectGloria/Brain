@@ -467,7 +467,7 @@ fn render_dev_bat(p: &RepoProfile) -> Option<(String, String)> {
 fn render_check_bat(p: &RepoProfile) -> (String, String) {
     let desc = "Run pre-flight build, tests, lint, version manifest sync, and repo checks";
     let mut body = String::from(
-        "$results = @()\n\
+        "$results = [System.Collections.Generic.List[object]]::new()\n\
          function Invoke-Step([string]$Name, [scriptblock]$Action) {\n\
          \tWrite-Host \"`n=== [$Name] ===\" -ForegroundColor Cyan\n\
          \t$ok = $false\n\
@@ -479,7 +479,7 @@ fn render_check_bat(p: &RepoProfile) -> (String, String) {
          \t\tWrite-Host $_ -ForegroundColor Red\n\
          \t\t$ok = $false\n\
          \t}\n\
-         \t$script:results += [PSCustomObject]@{ Name = $Name; Passed = $ok }\n\
+         \t[void]$results.Add([PSCustomObject]@{ Name = $Name; Passed = $ok })\n\
          }\n\n",
     );
 

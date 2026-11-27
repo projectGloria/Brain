@@ -1,6 +1,6 @@
 id = "Brain"
 name = "Brain"
-version = "0.5.2"
+version = "0.5.3"
 main_exe = "Brain.exe"
 icon = "Gloria.ico"
 accent = "#FF6B00"

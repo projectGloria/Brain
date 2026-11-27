@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ExternalLink, FolderOpen, RefreshCw, Rocket, Search } from "lucide-react";
 import { api } from "../api";
+import { HoverTip } from "../components/HoverTip";
 import { ReleaseModal } from "../components/ReleaseModal";
 import type { ReleaseRuns } from "../hooks/useReleaseRuns";
 import type { DnaProjectSummary, ReleaseJob } from "../types";
@@ -144,12 +145,28 @@ export function EvolveView({
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span className="repo-name">{p.repo}</span>
-                    {p.has_gloria_toml && <span className="status-badge ok">gloria.toml</span>}
+                    {p.has_gloria_toml && (
+                      <HoverTip text="Has a gloria.toml manifest for GloriaSetup Windows installer packaging.">
+                        <span className="status-badge ok">gloria.toml</span>
+                      </HoverTip>
+                    )}
                     {job && (
-                      <span className={`status-badge ${jobTone(job.status)}`}>
-                        {isRunning && <RefreshCw size={10} className="spin" />}
-                        {jobLabel(job)}
-                      </span>
+                      <HoverTip
+                        text={
+                          job.status === "running"
+                            ? "Release pipeline is running in the background."
+                            : job.status === "done"
+                            ? "GitHub Release was published successfully."
+                            : job.status === "failed"
+                            ? job.error ?? "Release pipeline failed. Click to inspect."
+                            : "Release was stopped before completion."
+                        }
+                      >
+                        <span className={`status-badge ${jobTone(job.status)}`}>
+                          {isRunning && <RefreshCw size={10} className="spin" />}
+                          {jobLabel(job)}
+                        </span>
+                      </HoverTip>
                     )}
                     {p.manifests.length > 0 && (
                       <span className="mini-tag">{p.manifests.length} manifest(s)</span>

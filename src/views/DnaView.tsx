@@ -10,11 +10,26 @@ import {
   Wrench,
 } from "lucide-react";
 import { api } from "../api";
+import { HoverTip } from "../components/HoverTip";
 import type {
   DnaApplyResult,
   DnaProjectInspect,
   DnaProjectSummary,
 } from "../types";
+
+const DNA_STATUS_HELP: Record<string, string> = {
+  READY: "All expected gloriaTools/*.bat scripts exist and match Brain's latest templates.",
+  OUTDATED: "One or more gloriaTools/*.bat scripts differ from Brain's latest templates.",
+  PARTIAL: "Some gloriaTools/*.bat scripts exist, but others are missing.",
+  MISSING: "No gloriaTools/ scripts have been generated for this repo yet.",
+};
+
+const TOOL_STATUS_HELP: Record<string, string> = {
+  IN_SYNC: "Script on disk matches Brain's generated template.",
+  OUTDATED: "Script on disk differs from Brain's updated template.",
+  NEW: "Script does not exist yet and will be created.",
+  CUSTOM: "Custom script not managed by Brain — preserved and never overwritten.",
+};
 
 interface DnaViewProps {
   projects: DnaProjectSummary[];
@@ -268,7 +283,9 @@ export function DnaView({
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <span className="repo-name">{p.repo}</span>
-                        <span className={`status-badge ${statusTone(p.status)}`}>{p.status}</span>
+                        <HoverTip text={DNA_STATUS_HELP[p.status] ?? p.status}>
+                          <span className={`status-badge ${statusTone(p.status)}`}>{p.status}</span>
+                        </HoverTip>
                         <span className="mini-tag">
                           {p.existing_count}/{p.expected_count} tools
                         </span>
@@ -387,9 +404,11 @@ export function DnaView({
                       <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
                         {t.file_name}
                       </span>
-                      <span className={`status-badge ${toolTone(t.status)}`} style={{ fontSize: 9.5, padding: "1px 5px" }}>
-                        {t.status}
-                      </span>
+                      <HoverTip text={TOOL_STATUS_HELP[t.status] ?? t.status}>
+                        <span className={`status-badge ${toolTone(t.status)}`} style={{ fontSize: 9.5, padding: "1px 5px" }}>
+                          {t.status}
+                        </span>
+                      </HoverTip>
                     </div>
                   );
                 })}

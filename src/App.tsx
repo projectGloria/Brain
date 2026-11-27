@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { CyberspaceBg } from "./components/CyberspaceBg";
+import { QueriesModal, type BackgroundQuery } from "./components/QueriesModal";
+import { ReleaseModal } from "./components/ReleaseModal";
 import { Sidebar } from "./components/Sidebar";
 import { SplashScreen } from "./components/SplashScreen";
 import { TitleBar } from "./components/TitleBar";
@@ -84,6 +86,8 @@ export function App() {
   const agentRuns = useAgentRuns(pushToast);
   const releaseRuns = useReleaseRuns(pushToast);
   const [runPreset, setRunPreset] = useState<AgentRunPreset | null>(null);
+  const [queriesModalOpen, setQueriesModalOpen] = useState(false);
+  const [inspectedReleaseRepo, setInspectedReleaseRepo] = useState<string | null>(null);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -449,6 +453,102 @@ export function App() {
     [releaseRuns.jobsByRepo]
   );
 
+  const activeQueries = useMemo<BackgroundQuery[]>(() => {
+    const list: BackgroundQuery[] = [];
+
+    for (const job of Object.values(releaseRuns.jobsByRepo)) {
+      if (job.status !== "running") continue;
+      const activeStep = job.steps.find((s) => s.status === "running")?.label ?? "Starting";
+      const lastLine = job.lines.length > 0 ? job.lines[job.lines.length - 1].text : null;
+      list.push({
+        id: `rel:${job.run_id}`,
+        kind: "evolve",
+        shortLabel: `Evolving ${job.repo_name} to ${job.new_version}`,
+        title: `Evolving ${job.repo_name} -> v${job.new_version}`,
+        subtitle: `Step: ${activeStep}`,
+        lastLine,
+        startedAt: job.started_at,
+        repoPath: job.repo_path,
+        runUrl: job.run_url,
+        canStop: true,
+        onInspect: () => {
+          setQueriesModalOpen(false);
+          setInspectedReleaseRepo(job.repo_path);
+        },
+        onStop: () => {
+          void releaseRuns.cancel(job.repo_path);
+        },
+      });
+    }
+
+    for (const s of agentRuns.sessions) {
+      if (s.status !== "running") continue;
+      const lastLine = s.lines.length > 0 ? s.lines[s.lines.length - 1].text : null;
+      list.push({
+        id: `agent:${s.key}`,
+        kind: "agent",
+        shortLabel: `${s.cli_name} in ${s.repo_name}`,
+        title: `${s.cli_name} · ${s.repo_name}`,
+        subtitle: s.title,
+        lastLine,
+        startedAt: s.started_at,
+        repoPath: s.repo_path,
+        canStop: true,
+        onInspect: () => {
+          setQueriesModalOpen(false);
+          setActiveTab("runs");
+        },
+        onStop: () => {
+          void agentRuns.stop(s.key);
+        },
+      });
+    }
+
+    for (const [cliId, kind] of Object.entries(cliBusy)) {
+      if (!kind) continue;
+      const name = clis.find((c) => c.id === cliId)?.name ?? cliId;
+      list.push({
+        id: `cli:${cliId}`,
+        kind: "cli",
+        shortLabel: `${kind === "install" ? "Installing" : "Updating"} ${name}`,
+        title: `${kind === "install" ? "Installing" : "Updating"} ${name}`,
+        subtitle: "Package manager running in background",
+        lastLine: null,
+        startedAt: Date.now(),
+        onInspect: () => {
+          setQueriesModalOpen(false);
+          setActiveTab("runs");
+        },
+      });
+    }
+
+    if (installing) {
+      list.push({
+        id: "brain:install",
+        kind: "brain",
+        shortLabel: "Deploying Brain skills",
+        title: "Compile & Deploy Brain",
+        subtitle: "Compiling init.md and syncing ~/.brain",
+        lastLine: null,
+        startedAt: Date.now(),
+      });
+    }
+
+    if (syncingAll) {
+      list.push({
+        id: "brain:sync-all",
+        kind: "brain",
+        shortLabel: "Syncing .brain/ across repos",
+        title: "Batch Sync .brain/",
+        subtitle: "Mirroring ~/.brain/*.md into repositories",
+        lastLine: null,
+        startedAt: Date.now(),
+      });
+    }
+
+    return list;
+  }, [releaseRuns, agentRuns, cliBusy, clis, installing, syncingAll]);
+
   const handleCreateDnaTools = async (
     repoPath: string,
     toolNames?: string[]
@@ -516,6 +616,8 @@ export function App() {
           fingerprint={appState?.master_fingerprint ?? "............"}
           masterInSync={appState?.master_in_sync_with_repo ?? true}
           installing={installing}
+          queries={activeQueries}
+          onOpenQueries={() => setQueriesModalOpen(true)}
           onInstallAll={handleInstallAll}
           onCopyFingerprint={handleCopyFingerprint}
           onReplaySplash={() => setShowSplash(true)}
@@ -692,6 +794,23 @@ export function App() {
         </div>
 
         <ToastHost toasts={toasts} onDismiss={dismissToast} />
+
+        {queriesModalOpen && (
+          <QueriesModal queries={activeQueries} onClose={() => setQueriesModalOpen(false)} />
+        )}
+
+        {inspectedReleaseRepo && (
+          <ReleaseModal
+            repoPath={inspectedReleaseRepo}
+            repoName={
+              releaseRuns.jobsByRepo[inspectedReleaseRepo]?.repo_name ??
+              inspectedReleaseRepo.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ??
+              inspectedReleaseRepo
+            }
+            runs={releaseRuns}
+            onClose={() => setInspectedReleaseRepo(null)}
+          />
+        )}
       </div>
     </>
   );

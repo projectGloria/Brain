@@ -11,11 +11,14 @@ import {
 } from "lucide-react";
 import gloriaIcon from "../assets/gloria.png";
 import { useAppVersion } from "../hooks/useAppVersion";
+import type { BackgroundQuery } from "./QueriesModal";
 
 interface TitleBarProps {
   fingerprint: string;
   masterInSync: boolean;
   installing: boolean;
+  queries: BackgroundQuery[];
+  onOpenQueries: () => void;
   onInstallAll: () => void;
   onCopyFingerprint: () => void;
   onReplaySplash: () => void;
@@ -25,6 +28,8 @@ export function TitleBar({
   fingerprint,
   masterInSync,
   installing,
+  queries,
+  onOpenQueries,
   onInstallAll,
   onCopyFingerprint,
   onReplaySplash,
@@ -97,6 +102,22 @@ export function TitleBar({
       />
 
       <div className="titlebar-actions">
+        {queries.length > 0 && (
+          <button
+            type="button"
+            className="query-pill"
+            onClick={onOpenQueries}
+            title="View active background queries"
+          >
+            <span className="query-pill-dot" />
+            <span className="query-pill-text">
+              {queries.length === 1
+                ? `Query: ${queries[0].shortLabel}`
+                : `Queries ${queries.length}..`}
+            </span>
+          </button>
+        )}
+
         <button
           type="button"
           className="fp-pill"

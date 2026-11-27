@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $env:GLORIA_TOOL_DIR.TrimEnd('\', '/')
 Set-Location -LiteralPath $RepoRoot
 
-$results = @()
+$results = [System.Collections.Generic.List[object]]::new()
 
 function Invoke-Step([string]$Name, [scriptblock]$Action) {
     Write-Host "`n=== [$Name] ===" -ForegroundColor Cyan
@@ -31,7 +31,7 @@ function Invoke-Step([string]$Name, [scriptblock]$Action) {
         Write-Host $_ -ForegroundColor Red
         $ok = $false
     }
-    $script:results += [PSCustomObject]@{ Name = $Name; Passed = $ok }
+    [void]$results.Add([PSCustomObject]@{ Name = $Name; Passed = $ok })
 }
 
 Invoke-Step 'Frontend build (tsc && vite build)' {
