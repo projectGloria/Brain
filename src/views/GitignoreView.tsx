@@ -128,8 +128,8 @@ export function GitignoreView({
             Shared .gitignore
           </h1>
           <p className="page-subtitle">
-            Edit one draft, then write it to any repository with one click. Applying overwrites
-            the repo's <code>.gitignore</code> with the draft.
+            Edit one draft, then write it to any repository with one click. Applying merges:
+            the draft comes first, the repo's own extra rules are kept below it, and the old file is saved as <code>.gitignore.bak</code>.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -282,7 +282,7 @@ export function GitignoreView({
                           disabled={!canApply || busy}
                           title={
                             r.gitignore_status === "DIFFERS"
-                              ? "Overwrite the existing .gitignore with the draft"
+                              ? "Merge the draft into the existing .gitignore (extra rules kept, backup in .gitignore.bak)"
                               : "Add the draft as .gitignore"
                           }
                         >
@@ -291,9 +291,9 @@ export function GitignoreView({
                             {busy
                               ? "Writing..."
                               : isArmed
-                              ? "Click again to overwrite"
+                              ? "Click again to merge"
                               : r.gitignore_status === "DIFFERS"
-                              ? "Overwrite"
+                              ? "Merge"
                               : "Add"}
                           </span>
                         </button>

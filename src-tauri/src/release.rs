@@ -26,6 +26,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const SHORT_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCKFILE_TIMEOUT: Duration = Duration::from_secs(90);
+const STREAM_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const WATCH_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseVersionFile {
@@ -69,6 +71,13 @@ pub struct ReleaseRequest {
     pub retry_same_version: bool,
     #[serde(default)]
     pub pre_fix: Option<String>,
+    /// Wait for the GitHub Actions run to finish (UI and `brain release --watch`).
+    #[serde(default = "default_true")]
+    pub watch: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -103,17 +112,50 @@ struct LogEvent<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct DoneEvent<'a> {
-    run_id: &'a str,
-    ok: bool,
-    cancelled: bool,
-    old_version: Option<String>,
-    new_version: String,
-    run_url: Option<String>,
-    release_url: Option<String>,
-    assets: Vec<String>,
-    error: Option<String>,
-    diagnosis: Option<ReleaseFailureDiagnosis>,
+pub struct ReleaseOutcome {
+    pub run_id: String,
+    pub repo_path: String,
+    pub ok: bool,
+    pub cancelled: bool,
+    pub old_version: Option<String>,
+    pub new_version: String,
+    pub workflow_run_id: Option<u64>,
+    pub run_url: Option<String>,
+    pub release_url: Option<String>,
+    pub assets: Vec<String>,
+    pub error: Option<String>,
+    pub diagnosis: Option<ReleaseFailureDiagnosis>,
+}
+
+/// Where a release run reports progress: the Tauri UI (events) or the CLI (stdout).
+pub trait ReleaseSink: Send + Sync {
+    fn step(&self, run_id: &str, step_id: &str, status: &str, detail: Option<String>);
+    fn log(&self, run_id: &str, stream: &str, text: String);
+    fn done(&self, outcome: &ReleaseOutcome);
+}
+
+pub type Sink = Arc<dyn ReleaseSink>;
+
+struct TauriSink(AppHandle);
+
+impl ReleaseSink for TauriSink {
+    fn step(&self, run_id: &str, step_id: &str, status: &str, detail: Option<String>) {
+        let _ = self.0.emit(
+            EVENT_STEP,
+            StepEvent {
+                run_id,
+                step_id,
+                status,
+                detail,
+            },
+        );
+    }
+    fn log(&self, run_id: &str, stream: &str, text: String) {
+        let _ = self.0.emit(EVENT_LOG, LogEvent { run_id, stream, text });
+    }
+    fn done(&self, outcome: &ReleaseOutcome) {
+        let _ = self.0.emit(EVENT_DONE, outcome);
+    }
 }
 
 struct ReleaseHandle {
@@ -126,27 +168,12 @@ fn running() -> &'static Mutex<HashMap<String, ReleaseHandle>> {
     RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn emit_step(app: &AppHandle, run_id: &str, step_id: &str, status: &str, detail: Option<String>) {
-    let _ = app.emit(
-        EVENT_STEP,
-        StepEvent {
-            run_id,
-            step_id,
-            status,
-            detail,
-        },
-    );
+fn emit_step(app: &Sink, run_id: &str, step_id: &str, status: &str, detail: Option<String>) {
+    app.step(run_id, step_id, status, detail);
 }
 
-fn emit_log(app: &AppHandle, run_id: &str, stream: &'static str, text: String) {
-    let _ = app.emit(
-        EVENT_LOG,
-        LogEvent {
-            run_id,
-            stream,
-            text,
-        },
-    );
+fn emit_log(app: &Sink, run_id: &str, stream: &'static str, text: String) {
+    app.log(run_id, stream, text);
 }
 
 fn build_cmd(program: &str, args: &[&str], cwd: &Path) -> Command {
@@ -258,7 +285,7 @@ fn push_recent(recent: &Arc<Mutex<Vec<String>>>, line: &str) {
 }
 
 fn pump_stream<R: Read + Send + 'static>(
-    app: AppHandle,
+    app: Sink,
     run_id: String,
     pipe: R,
     stream: &'static str,
@@ -289,7 +316,7 @@ fn pump_stream<R: Read + Send + 'static>(
 
 #[allow(clippy::too_many_arguments)]
 fn run_streaming(
-    app: &AppHandle,
+    app: &Sink,
     run_id: &str,
     current_pid: &Arc<Mutex<Option<u32>>>,
     cancelled: &Arc<AtomicBool>,
@@ -323,9 +350,24 @@ fn run_streaming(
         .take()
         .map(|p| pump_stream(app.clone(), run_id.to_string(), p, "err", recent.clone()));
 
-    let status = child
-        .wait()
-        .map_err(|e| format!("Failed waiting for '{program}': {e}"));
+    let is_watch = program == "gh" && args.first() == Some(&"run") && args.get(1) == Some(&"watch");
+    let timeout = if is_watch { WATCH_TIMEOUT } else { STREAM_TIMEOUT };
+    let start = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Ok(s),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    timed_out = true;
+                    let _ = kill_tree(child.id());
+                    break child.wait().map_err(|e| format!("Failed waiting for '{program}': {e}"));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => break Err(format!("Failed waiting for '{program}': {e}")),
+        }
+    };
 
     if let Ok(mut slot) = current_pid.lock() {
         *slot = None;
@@ -335,6 +377,13 @@ fn run_streaming(
         let _ = t.join();
     }
 
+    if timed_out {
+        return Err(format!(
+            "'{program} {}' timed out after {} minutes.",
+            args.join(" "),
+            timeout.as_secs() / 60
+        ));
+    }
     let status = status?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled.".to_string());
@@ -521,17 +570,59 @@ fn read_json_version(raw: &str) -> Option<String> {
         .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string))
 }
 
-fn replace_first_json_version(raw: &str, new_version: &str) -> Option<String> {
-    let re = Regex::new(r#"("version"\s*:\s*")([^"]+)(")"#).ok()?;
-    if !re.is_match(raw) {
-        return None;
+/// Byte range of the top-level `"version"` string value in a JSON document.
+fn top_level_json_version_span(raw: &str) -> Option<(usize, usize)> {
+    let b = raw.as_bytes();
+    // Index just past the closing quote of the JSON string opening at `j`.
+    let skip_str = |mut j: usize| -> usize {
+        j += 1;
+        while j < b.len() {
+            match b[j] {
+                b'\\' => j += 2,
+                b'"' => return j + 1,
+                _ => j += 1,
+            }
+        }
+        b.len()
+    };
+    let skip_ws = |mut k: usize| -> usize {
+        while k < b.len() && b[k].is_ascii_whitespace() {
+            k += 1;
+        }
+        k
+    };
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b'"' => {
+                let end = skip_str(i);
+                if depth == 1 && &raw[i..end] == "\"version\"" {
+                    let k = skip_ws(end);
+                    if k < b.len() && b[k] == b':' {
+                        let v = skip_ws(k + 1);
+                        if v < b.len() && b[v] == b'"' {
+                            let vend = skip_str(v);
+                            return Some((v + 1, vend.saturating_sub(1).max(v + 1)));
+                        }
+                    }
+                }
+                i = end;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
     }
-    Some(
-        re.replace(raw, |caps: &regex::Captures| {
-            format!("{}{new_version}{}", &caps[1], &caps[3])
-        })
-        .into_owned(),
-    )
+    None
+}
+
+/// Replaces only the top-level `"version"` value, never one nested in dependencies or scripts.
+fn replace_first_json_version(raw: &str, new_version: &str) -> Option<String> {
+    let (start, end) = top_level_json_version_span(raw)?;
+    Some(format!("{}{new_version}{}", &raw[..start], &raw[end..]))
 }
 
 fn detect_version_files(repo_root: &Path, is_gloria_setup: bool) -> Vec<(String, String)> {
@@ -603,7 +694,7 @@ fn detect_version_files(repo_root: &Path, is_gloria_setup: bool) -> Vec<(String,
         }
     }
 
-    if let Ok(gradle_re) = Regex::new(r#"versionName\s*=?\s*"([^"]+)""#) {
+    if let Ok(gradle_re) = Regex::new(r#"(?m)^\s*versionName\s*=?\s*"([^"]+)""#) {
         for rel in [
             "android/app/build.gradle",
             "android/app/build.gradle.kts",
@@ -647,11 +738,7 @@ pub fn preflight(repo_path: &Path) -> Result<ReleasePreflight, String> {
     if !repo_path.is_dir() {
         return Err(format!("Repository '{}' does not exist.", repo_path.display()));
     }
-    let repo_name = repo_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("project")
-        .to_string();
+    let repo_name = git_repo_name(repo_path);
 
     let is_gloria_setup = is_gloria_setup_repo(repo_path);
     let has_gloria_toml = repo_path.join("gloria.toml").is_file();
@@ -722,7 +809,7 @@ pub fn preflight(repo_path: &Path) -> Result<ReleasePreflight, String> {
     } else if is_gloria_setup {
         "ready".to_string()
     } else if let Ok(raw) = read_utf8(&wf_path) {
-        if raw.contains("GloriaSetup/.github/workflows/app-check.yml@main") {
+        if uses_gloria_workflows(&raw) {
             "ready".to_string()
         } else {
             "custom".to_string()
@@ -813,72 +900,6 @@ pub fn preflight(repo_path: &Path) -> Result<ReleasePreflight, String> {
     })
 }
 
-const GLORIA_SETUP_TEMPLATE: &str = r#"# projectGloria app release. Copy to .github/workflows/release.yml and edit only the `build` job.
-#
-# Runs only when started on purpose: /gloria-github-release, or `gh workflow run release.yml`.
-# Pushing to main never releases.
-#
-#   check   (shared)  version files agree, version not released yet, gloria.toml valid, picks newest gloria-setup
-#   build   (this repo) builds the app and uploads its files as the artifact `app`
-#   release (shared)  packs with that gloria-setup + dry run (or, without gloria.toml, publishes the files as-is),
-#                     then publishes GitHub Release v<version> with SHA256SUMS.txt
-#
-# The shared jobs live in projectGloria/GloriaSetup and are used from @main, so every release picks up
-# the newest checks and the newest gloria-setup without editing this file.
-name: Release
-
-on:
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Build and verify everything, but do not publish
-        type: boolean
-        default: false
-
-permissions:
-  contents: read
-
-concurrency:
-  group: release
-  cancel-in-progress: false
-
-jobs:
-  check:
-    uses: projectGloria/GloriaSetup/.github/workflows/app-check.yml@main
-
-  build:
-    needs: check
-    runs-on: windows-latest
-    env:
-      VERSION: ${{ needs.check.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # ---- App-specific: build, test, and copy the files to install into stage/ ----
-      # Installer apps: stage/ is the app folder (it must contain gloria.toml's main_exe).
-      # Extensions / Android: stage/ holds the files to publish (e.g. MyExt-<version>.zip, MyApp-<version>.apk).
-      - name: Build
-        shell: pwsh
-        run: |
-          throw 'Replace this step with the app build, then copy the result into stage/'
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: app
-          path: stage/
-          if-no-files-found: error
-
-  release:
-    needs: [check, build]
-    uses: projectGloria/GloriaSetup/.github/workflows/app-release.yml@main
-    permissions:
-      contents: write
-    with:
-      version: ${{ needs.check.outputs.version }}
-      installer: ${{ needs.check.outputs.installer == 'true' }}
-      gloria_setup: ${{ needs.check.outputs.gloria_setup }}
-      dry_run: ${{ inputs.dry_run }}
-"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppStack {
@@ -1234,9 +1255,170 @@ fn build_steps_for_stack(repo_root: &Path, repo_name: &str, main_exe: &str, stac
     }
 }
 
+/// Paths `git status` reports as changed or untracked (repo-relative, forward slashes).
+fn porcelain_paths(repo: &Path) -> Vec<String> {
+    let Ok((Some(0), out, _, false)) =
+        run_capture_in_dir(repo, "git", &["status", "--porcelain=v1", "-uall"], SHORT_TIMEOUT)
+    else {
+        return Vec::new();
+    };
+    out.lines()
+        .filter(|l| l.len() > 3)
+        .map(|l| {
+            let path = &l[3..];
+            let path = path.rsplit(" -> ").next().unwrap_or(path);
+            path.trim().trim_matches('"').replace('\\', "/")
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// The GitHub repo name from `origin` (so gloria.toml id/name match it), else the folder name.
+pub fn git_repo_name(repo: &Path) -> String {
+    if let Ok((Some(0), out, _, false)) =
+        run_capture_in_dir(repo, "git", &["remote", "get-url", "origin"], SHORT_TIMEOUT)
+    {
+        let url = out.trim().trim_end_matches('/');
+        let url = url.strip_suffix(".git").unwrap_or(url);
+        if let Some(name) = url.rsplit(['/', ':']).next().filter(|n| !n.is_empty()) {
+            return name.to_string();
+        }
+    }
+    repo.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("App")
+        .to_string()
+}
+
+/// True when release.yml uses the shared GloriaSetup jobs (any ref: @v0, @main, ...).
+fn uses_gloria_workflows(raw: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"GloriaSetup/\.github/workflows/app-check\.yml@").expect("valid regex"))
+        .is_match(raw)
+}
+
+/// The shared release.yml template, read from GloriaSetup: the sibling checkout
+/// `..\GloriaSetup\templates\release.yml` first, then GitHub through `gh api`.
+pub fn load_release_template(repo_root: &Path) -> Result<String, String> {
+    if let Some(local) = repo_root
+        .parent()
+        .map(|p| p.join("GloriaSetup").join("templates").join("release.yml"))
+        .filter(|p| p.is_file())
+    {
+        return read_utf8(&local);
+    }
+    static REMOTE: OnceLock<Result<String, String>> = OnceLock::new();
+    REMOTE
+        .get_or_init(|| {
+            match run_capture_in_dir(
+                repo_root,
+                "gh",
+                &[
+                    "api",
+                    "-H",
+                    "Accept: application/vnd.github.raw",
+                    "repos/projectGloria/GloriaSetup/contents/templates/release.yml",
+                ],
+                SHORT_TIMEOUT,
+            ) {
+                Ok((Some(0), out, _, false)) if out.contains("jobs:") => Ok(out),
+                Ok((_, _, err, _)) => Err(format!(
+                    "Could not read the GloriaSetup release template (no ..\\GloriaSetup checkout; gh api failed: {}).",
+                    err.trim()
+                )),
+                Err(e) => Err(format!("Could not read the GloriaSetup release template: {e}")),
+            }
+        })
+        .clone()
+}
+
+/// Steps of a custom workflow that build the app (checkout, artifact, release and
+/// GloriaSetup steps are dropped), re-indented for the template's `build` job.
+fn extract_custom_build_steps(raw: &str) -> Option<String> {
+    let text = raw.replace("\r\n", "\n");
+    let lines: Vec<&str> = text.lines().collect();
+    let mut steps: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() != "steps:" {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let mut base: Option<usize> = None;
+        let mut items: Vec<Vec<&str>> = Vec::new();
+        while i < lines.len() {
+            let line = lines[i];
+            let indent = line.len() - line.trim_start().len();
+            if !line.trim().is_empty() {
+                let is_item = line.trim_start().starts_with("- ");
+                match base {
+                    None if !is_item => break,
+                    None => base = Some(indent),
+                    Some(b) if indent < b => break,
+                    _ => {}
+                }
+                if Some(indent) == base && is_item {
+                    items.push(Vec::new());
+                }
+            }
+            if let Some(cur) = items.last_mut() {
+                cur.push(line);
+            }
+            i += 1;
+        }
+        let b = base.unwrap_or(0);
+        for item in items {
+            let text = item
+                .iter()
+                .map(|ln| {
+                    if ln.trim().is_empty() {
+                        String::new()
+                    } else {
+                        let cut = b.min(ln.len() - ln.trim_start().len());
+                        format!("      {}", &ln[cut..])
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            steps.push(text.trim_end().to_string());
+        }
+    }
+    const SKIP: &[&str] = &[
+        "actions/checkout",
+        "upload-artifact",
+        "download-artifact",
+        "action-gh-release",
+        "gh release",
+        "GloriaSetup",
+        "gloria-setup",
+    ];
+    let kept: Vec<String> = steps
+        .into_iter()
+        .filter(|st| !SKIP.iter().any(|k| st.contains(k)))
+        .collect();
+    if kept.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "      # Migrated from release.yml.pre-gloria: these steps must copy the app into stage/.\n{}",
+            kept.join("\n")
+        ))
+    }
+}
+
 pub fn bootstrap_gloria_setup(
     repo_root: &Path,
     version_override: Option<&str>,
+) -> Result<Vec<String>, String> {
+    bootstrap_gloria_setup_with(repo_root, version_override, None)
+}
+
+/// `bootstrap_gloria_setup` with an explicit release.yml template (used by tests).
+pub fn bootstrap_gloria_setup_with(
+    repo_root: &Path,
+    version_override: Option<&str>,
+    template_override: Option<&str>,
 ) -> Result<Vec<String>, String> {
     if !repo_root.is_dir() {
         return Err(format!("Repository '{}' does not exist.", repo_root.display()));
@@ -1245,11 +1427,7 @@ pub fn bootstrap_gloria_setup(
         return Ok(Vec::new());
     }
 
-    let repo_name = repo_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("App")
-        .to_string();
+    let repo_name = git_repo_name(repo_root);
     let stack = detect_app_stack(repo_root);
     let main_exe = detect_main_exe(repo_root, &repo_name, stack);
     let mut created = Vec::new();
@@ -1290,19 +1468,28 @@ pub fn bootstrap_gloria_setup(
 
     // 2. .github/workflows/release.yml
     let wf_path = repo_root.join(".github/workflows/release.yml");
-    let needs_wf = !wf_path.is_file()
-        || !read_utf8(&wf_path)
-            .map(|r| r.contains("GloriaSetup/.github/workflows/app-check.yml@main"))
-            .unwrap_or(false);
+    let existing = if wf_path.is_file() { Some(read_utf8(&wf_path)?) } else { None };
+    let needs_wf = existing.as_deref().map(|r| !uses_gloria_workflows(r)).unwrap_or(true);
     if needs_wf {
-        let template = repo_root
-            .parent()
-            .map(|p| p.join("GloriaSetup/templates/release.yml"))
-            .filter(|p| p.is_file())
-            .and_then(|p| read_utf8(&p).ok())
-            .unwrap_or_else(|| GLORIA_SETUP_TEMPLATE.to_string());
+        let template = match template_override {
+            Some(t) => t.to_string(),
+            None => load_release_template(repo_root)?,
+        };
 
-        let build_steps = build_steps_for_stack(repo_root, &repo_name, &main_exe, stack)?;
+        // A custom workflow is backed up; its build steps are kept when Brain has no
+        // generic build for this stack.
+        let build_steps = match (build_steps_for_stack(repo_root, &repo_name, &main_exe, stack), &existing) {
+            (Ok(steps), _) => steps,
+            (Err(e), Some(old)) => extract_custom_build_steps(old).ok_or(e)?,
+            (Err(e), None) => return Err(e),
+        };
+        if let Some(old) = &existing {
+            let backup = wf_path.with_file_name("release.yml.pre-gloria");
+            if !backup.exists() {
+                write_utf8_no_bom(&backup, old)?;
+                created.push(".github/workflows/release.yml.pre-gloria".to_string());
+            }
+        }
         let placeholder_re = Regex::new(
             r"(?ms)^      - name: Build\r?\n        shell: pwsh\r?\n        run: \|\r?\n          throw 'Replace this step with the app build, then copy the result into stage/'",
         )
@@ -1494,7 +1681,7 @@ pub fn bump_version_files(
     }
 
     // Android build.gradle / build.gradle.kts
-    let gradle_re = Regex::new(r#"(versionName\s*=?\s*")([^"]+)(")"#).map_err(|e| e.to_string())?;
+    let gradle_re = Regex::new(r#"(?m)^(\s*versionName\s*=?\s*")([^"]+)(")"#).map_err(|e| e.to_string())?;
     for rel in [
         "android/app/build.gradle",
         "android/app/build.gradle.kts",
@@ -1720,7 +1907,27 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
 
     let current_pid = Arc::new(Mutex::new(None));
     let cancelled = Arc::new(AtomicBool::new(false));
+    let sink: Sink = Arc::new(TauriSink(app));
+    std::thread::spawn(move || {
+        let _ = run_blocking(sink, req, cancelled, current_pid);
+    });
 
+    Ok(ReleaseStarted {
+        run_id,
+        version: new_version,
+    })
+}
+
+/// Runs a whole release on the calling thread and returns its outcome (also sent to `app.done`).
+pub fn run_blocking(
+    app: Sink,
+    req: ReleaseRequest,
+    cancelled: Arc<AtomicBool>,
+    current_pid: Arc<Mutex<Option<u32>>>,
+) -> ReleaseOutcome {
+    let run_id = req.run_id.trim().to_string();
+    let repo = PathBuf::from(req.repo_path.trim());
+    let new_version = normalize_version(&req.version);
     if let Ok(mut map) = running().lock() {
         map.insert(
             run_id.clone(),
@@ -1735,237 +1942,249 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
     let run_local_check = req.run_local_check;
     let retry_same_version = req.retry_same_version;
     let pre_fix = req.pre_fix.clone();
-    let version_ret = new_version.clone();
-    let run_id_ret = run_id.clone();
+    let watch = req.watch;
 
-    std::thread::spawn(move || {
-        let mut old_version: Option<String> = None;
-        let mut run_url: Option<String> = None;
-        let mut release_url: Option<String> = None;
-        let mut assets: Vec<String> = Vec::new();
-        let mut current_step = "preflight";
-        let recent = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut old_version: Option<String> = None;
+    let mut workflow_run_id: Option<u64> = None;
+    let mut run_url: Option<String> = None;
+    let mut release_url: Option<String> = None;
+    let mut assets: Vec<String> = Vec::new();
+    let mut created_files: Vec<String> = Vec::new();
+    let mut current_step = "preflight";
+    let recent = Arc::new(Mutex::new(Vec::<String>::new()));
 
-        let result: Result<(), String> = (|| {
-            // 1. Preflight
-            emit_step(&app, &run_id, "preflight", "running", None);
-            emit_log(&app, &run_id, "info", "Running preflight checks...".to_string());
-            let mut pre = preflight(&repo)?;
-            old_version = pre.current_version.clone();
-            if !pre.blockers.is_empty() {
-                return Err(pre.blockers.join(" "));
-            }
-            if pre.needs_bootstrap && !pre.is_gloria_setup {
-                emit_log(
-                    &app,
-                    &run_id,
-                    "info",
-                    "Configuring GloriaSetup (gloria.toml / release.yml)...".to_string(),
-                );
-                let created = bootstrap_gloria_setup(&repo, Some(&new_version))?;
-                for f in &created {
-                    emit_log(&app, &run_id, "info", format!("Generated {f}"));
-                }
-                pre.has_gloria_toml = repo.join("gloria.toml").is_file();
-            }
-            let tag = format!("v{new_version}");
-            if let Ok((Some(0), _, _, false)) =
-                run_capture_in_dir(&repo, "gh", &["release", "view", &tag], SHORT_TIMEOUT)
-            {
-                return Err(format!("Release {tag} already exists on GitHub."));
-            }
-            emit_step(
+    let result: Result<(), String> = (|| {
+        if !repo.is_dir() {
+            return Err(format!("Repository folder '{}' does not exist.", repo.display()));
+        }
+        validate_version(&new_version)?;
+        // 1. Preflight
+        emit_step(&app, &run_id, "preflight", "running", None);
+        let dirty_before = porcelain_paths(&repo);
+        emit_log(&app, &run_id, "info", "Running preflight checks...".to_string());
+        let mut pre = preflight(&repo)?;
+        old_version = pre.current_version.clone();
+        if !pre.blockers.is_empty() {
+            return Err(pre.blockers.join(" "));
+        }
+        if pre.needs_bootstrap && !pre.is_gloria_setup {
+            emit_log(
                 &app,
                 &run_id,
-                "preflight",
-                "done",
-                Some(format!(
-                    "{} -> {}",
-                    old_version.as_deref().unwrap_or("none"),
-                    new_version
-                )),
+                "info",
+                "Configuring GloriaSetup (gloria.toml / release.yml)...".to_string(),
             );
+            let created = bootstrap_gloria_setup(&repo, Some(&new_version))?;
+            for f in &created {
+                emit_log(&app, &run_id, "info", format!("Generated {f}"));
+            }
+            created_files.extend(created);
+            pre.has_gloria_toml = repo.join("gloria.toml").is_file();
+        }
+        let tag = format!("v{new_version}");
+        if let Ok((Some(0), _, _, false)) =
+            run_capture_in_dir(&repo, "gh", &["release", "view", &tag], SHORT_TIMEOUT)
+        {
+            return Err(format!("Release {tag} already exists on GitHub."));
+        }
+        emit_step(
+            &app,
+            &run_id,
+            "preflight",
+            "done",
+            Some(format!(
+                "{} -> {}",
+                old_version.as_deref().unwrap_or("none"),
+                new_version
+            )),
+        );
 
-            // Optional deterministic pre-fix before bumping/committing
-            if let Some(ref fix) = pre_fix {
-                match fix.as_str() {
-                    "cargo_fmt" => {
-                        emit_log(&app, &run_id, "info", "Applying deterministic fix: cargo fmt --all...".to_string());
-                        let fmt_dir = if repo.join("src-tauri/Cargo.toml").is_file() {
-                            repo.join("src-tauri")
-                        } else {
-                            repo.clone()
-                        };
-                        let code = run_streaming(
-                            &app,
-                            &run_id,
-                            &current_pid,
-                            &cancelled,
-                            &recent,
-                            &fmt_dir,
-                            "cargo",
-                            &["fmt", "--all"],
-                        )?;
-                        if code != 0 {
-                            return Err(format!("cargo fmt --all failed (exit {code})."));
-                        }
+        // Optional deterministic pre-fix before bumping/committing
+        if let Some(ref fix) = pre_fix {
+            match fix.as_str() {
+                "cargo_fmt" => {
+                    emit_log(&app, &run_id, "info", "Applying deterministic fix: cargo fmt --all...".to_string());
+                    let fmt_dir = if repo.join("src-tauri/Cargo.toml").is_file() {
+                        repo.join("src-tauri")
+                    } else {
+                        repo.clone()
+                    };
+                    let code = run_streaming(
+                        &app,
+                        &run_id,
+                        &current_pid,
+                        &cancelled,
+                        &recent,
+                        &fmt_dir,
+                        "cargo",
+                        &["fmt", "--all"],
+                    )?;
+                    if code != 0 {
+                        return Err(format!("cargo fmt --all failed (exit {code})."));
                     }
-                    "refresh_lockfiles" => {
-                        emit_log(&app, &run_id, "info", "Applying deterministic fix: refreshing lockfiles...".to_string());
-                        for dir in [&repo, &repo.join("src-tauri")] {
-                            if dir.join("Cargo.lock").is_file() {
-                                let code = run_streaming(
-                                    &app,
-                                    &run_id,
-                                    &current_pid,
-                                    &cancelled,
-                                    &recent,
-                                    dir,
-                                    "cargo",
-                                    &["update", "--workspace", "--offline"],
-                                )?;
-                                if code != 0 {
-                                    return Err(format!("cargo update --workspace --offline failed (exit {code})."));
-                                }
-                            }
-                        }
-                        if repo.join("package-lock.json").is_file() {
+                }
+                "refresh_lockfiles" => {
+                    emit_log(&app, &run_id, "info", "Applying deterministic fix: refreshing lockfiles...".to_string());
+                    for dir in [&repo, &repo.join("src-tauri")] {
+                        if dir.join("Cargo.lock").is_file() {
                             let code = run_streaming(
                                 &app,
                                 &run_id,
                                 &current_pid,
                                 &cancelled,
                                 &recent,
-                                &repo,
-                                "npm",
-                                &["install", "--package-lock-only"],
+                                dir,
+                                "cargo",
+                                &["update", "--workspace", "--offline"],
                             )?;
                             if code != 0 {
-                                return Err(format!("npm install --package-lock-only failed (exit {code})."));
+                                return Err(format!("cargo update --workspace --offline failed (exit {code})."));
                             }
                         }
                     }
-                    _ => {}
-                }
-            }
-
-            // 2. Bump
-            current_step = "bump";
-            emit_step(&app, &run_id, "bump", "running", None);
-            emit_log(
-                &app,
-                &run_id,
-                "info",
-                "Bumping version manifests and lockfiles...".to_string(),
-            );
-            let bumped = bump_version_files(&repo, &new_version, true)?;
-            if bumped.is_empty() {
-                emit_log(&app, &run_id, "info", "No version files found to bump.".to_string());
-            } else {
-                for f in &bumped {
-                    emit_log(&app, &run_id, "info", format!("Bumped {f} -> {new_version}"));
-                }
-            }
-            emit_step(
-                &app,
-                &run_id,
-                "bump",
-                "done",
-                Some(format!("{} file(s)", bumped.len())),
-            );
-
-            // 3. Validate gloria.toml (+ optional local check.bat)
-            current_step = "validate";
-            let check_bat = repo.join("gloriaTools/check.bat");
-            let has_gloria_check = pre.has_gloria_toml && !pre.is_gloria_setup;
-            let has_local_check = run_local_check && check_bat.is_file();
-            if has_gloria_check || has_local_check {
-                emit_step(&app, &run_id, "validate", "running", None);
-                if has_gloria_check {
-                    let code = run_streaming(
-                        &app,
-                        &run_id,
-                        &current_pid,
-                        &cancelled,
-                        &recent,
-                        &repo,
-                        "npx",
-                        &[
-                            "--yes",
-                            "gloria-setup@latest",
-                            "--check",
-                            "--manifest",
-                            "gloria.toml",
-                            "--version",
-                            &new_version,
-                        ],
-                    )?;
-                    if code != 0 {
-                        return Err(format!("gloria-setup --check failed (exit {code})."));
+                    if repo.join("package-lock.json").is_file() {
+                        let code = run_streaming(
+                            &app,
+                            &run_id,
+                            &current_pid,
+                            &cancelled,
+                            &recent,
+                            &repo,
+                            "npm",
+                            &["install", "--package-lock-only"],
+                        )?;
+                        if code != 0 {
+                            return Err(format!("npm install --package-lock-only failed (exit {code})."));
+                        }
                     }
                 }
-                if has_local_check {
-                    emit_log(&app, &run_id, "info", "Running local gloriaTools/check.bat...".to_string());
-                    let code = run_streaming(
-                        &app,
-                        &run_id,
-                        &current_pid,
-                        &cancelled,
-                        &recent,
-                        &repo,
-                        "cmd.exe",
-                        &["/C", "gloriaTools\\check.bat"],
-                    )?;
-                    if code != 0 {
-                        return Err(format!("gloriaTools/check.bat failed (exit {code})."));
-                    }
-                }
-                emit_step(&app, &run_id, "validate", "done", Some("Validated".to_string()));
-            } else {
-                emit_step(&app, &run_id, "validate", "skipped", Some("No gloria.toml".to_string()));
+                _ => {}
             }
+        }
 
-            // 4. Commit & push
-            current_step = "push";
-            emit_step(&app, &run_id, "push", "running", None);
-            let add_code = run_streaming(&app, &run_id, &current_pid, &cancelled, &recent, &repo, "git", &["add", "-A"])?;
-            if add_code != 0 {
-                return Err(format!("git add -A failed (exit {add_code})."));
+        // 2. Bump
+        current_step = "bump";
+        emit_step(&app, &run_id, "bump", "running", None);
+        emit_log(
+            &app,
+            &run_id,
+            "info",
+            "Bumping version manifests and lockfiles...".to_string(),
+        );
+        let bumped = bump_version_files(&repo, &new_version, true)?;
+        if bumped.is_empty() {
+            emit_log(&app, &run_id, "info", "No version files found to bump.".to_string());
+        } else {
+            for f in &bumped {
+                emit_log(&app, &run_id, "info", format!("Bumped {f} -> {new_version}"));
             }
+        }
+        emit_step(
+            &app,
+            &run_id,
+            "bump",
+            "done",
+            Some(format!("{} file(s)", bumped.len())),
+        );
 
-            let diff_quiet = run_capture_in_dir(&repo, "git", &["diff", "--cached", "--quiet"], SHORT_TIMEOUT)?;
-            if diff_quiet.0 != Some(0) {
-                let commit_msg = if retry_same_version {
-                    match pre_fix.as_deref() {
-                        Some("cargo_fmt") => format!("Fix formatting so the {new_version} release builds."),
-                        Some("refresh_lockfiles") => format!("Fix lockfiles so the {new_version} release builds."),
-                        Some("resync_versions") => format!("Sync version manifests so the {new_version} release builds."),
-                        _ => format!("Fix release build for {new_version}."),
-                    }
-                } else {
-                    match &note {
-                        Some(n) => format!("Release {new_version}: {}.", n.trim_end_matches('.')),
-                        None => format!("Release {new_version}."),
-                    }
-                };
-                let c_code = run_streaming(
+        // 3. Validate gloria.toml (+ optional local check.bat)
+        current_step = "validate";
+        let check_bat = repo.join("gloriaTools/check.bat");
+        let has_gloria_check = pre.has_gloria_toml && !pre.is_gloria_setup;
+        let has_local_check = run_local_check && check_bat.is_file();
+        if has_gloria_check || has_local_check {
+            emit_step(&app, &run_id, "validate", "running", None);
+            if has_gloria_check {
+                let code = run_streaming(
                     &app,
                     &run_id,
                     &current_pid,
                     &cancelled,
                     &recent,
                     &repo,
-                    "git",
-                    &["commit", "-m", &commit_msg],
+                    "npx",
+                    &[
+                        "--yes",
+                        "gloria-setup@latest",
+                        "--check",
+                        "--manifest",
+                        "gloria.toml",
+                        "--version",
+                        &new_version,
+                    ],
                 )?;
-                if c_code != 0 {
-                    return Err(format!("git commit failed (exit {c_code})."));
+                if code != 0 {
+                    return Err(format!("gloria-setup --check failed (exit {code})."));
+                }
+            }
+            if has_local_check {
+                emit_log(&app, &run_id, "info", "Running local gloriaTools/check.bat...".to_string());
+                let code = run_streaming(
+                    &app,
+                    &run_id,
+                    &current_pid,
+                    &cancelled,
+                    &recent,
+                    &repo,
+                    "cmd.exe",
+                    &["/C", "gloriaTools\\check.bat"],
+                )?;
+                if code != 0 {
+                    return Err(format!("gloriaTools/check.bat failed (exit {code})."));
+                }
+            }
+            emit_step(&app, &run_id, "validate", "done", Some("Validated".to_string()));
+        } else {
+            emit_step(&app, &run_id, "validate", "skipped", Some("No gloria.toml".to_string()));
+        }
+
+        // 4. Commit & push
+        current_step = "push";
+        emit_step(&app, &run_id, "push", "running", None);
+        // Stage only what this run changed: bumped and generated files plus files that
+        // were clean before the run (pre-fixes, lockfiles). Earlier uncommitted work stays out.
+        let mut to_add: Vec<String> = bumped.iter().chain(created_files.iter()).cloned().collect();
+        for f in porcelain_paths(&repo) {
+            if !dirty_before.contains(&f) {
+                to_add.push(f);
+            }
+        }
+        to_add.sort();
+        to_add.dedup();
+        let left_out = dirty_before.iter().filter(|f| !to_add.contains(f)).count();
+        if left_out > 0 {
+            emit_log(
+                &app,
+                &run_id,
+                "info",
+                format!("Leaving {left_out} earlier uncommitted change(s) out of the release commit."),
+            );
+        }
+        if !to_add.is_empty() {
+            let mut add_args: Vec<&str> = vec!["add", "--"];
+            add_args.extend(to_add.iter().map(String::as_str));
+            let add_code = run_streaming(&app, &run_id, &current_pid, &cancelled, &recent, &repo, "git", &add_args)?;
+            if add_code != 0 {
+                return Err(format!("git add failed (exit {add_code})."));
+            }
+        }
+
+        let diff_quiet = run_capture_in_dir(&repo, "git", &["diff", "--cached", "--quiet"], SHORT_TIMEOUT)?;
+        if diff_quiet.0 != Some(0) {
+            let commit_msg = if retry_same_version {
+                match pre_fix.as_deref() {
+                    Some("cargo_fmt") => format!("Fix formatting so the {new_version} release builds."),
+                    Some("refresh_lockfiles") => format!("Fix lockfiles so the {new_version} release builds."),
+                    Some("resync_versions") => format!("Sync version manifests so the {new_version} release builds."),
+                    _ => format!("Fix release build for {new_version}."),
                 }
             } else {
-                emit_log(&app, &run_id, "info", "Working tree clean; pushing existing HEAD.".to_string());
-            }
-
-            let push_code = run_streaming(
+                match &note {
+                    Some(n) => format!("Release {new_version}: {}.", n.trim_end_matches('.')),
+                    None => format!("Release {new_version}."),
+                }
+            };
+            let c_code = run_streaming(
                 &app,
                 &run_id,
                 &current_pid,
@@ -1973,171 +2192,174 @@ pub fn start(app: AppHandle, req: ReleaseRequest) -> Result<ReleaseStarted, Stri
                 &recent,
                 &repo,
                 "git",
-                &["push", "origin", "main"],
+                &["commit", "-m", &commit_msg],
             )?;
-            if push_code != 0 {
-                return Err(format!("git push origin main failed (exit {push_code})."));
+            if c_code != 0 {
+                return Err(format!("git commit failed (exit {c_code})."));
             }
-            emit_step(&app, &run_id, "push", "done", Some("origin/main".to_string()));
-
-            // 5. Dispatch workflow & match headSha
-            current_step = "dispatch";
-            emit_step(&app, &run_id, "dispatch", "running", None);
-            let (_, head_out, _, _) =
-                run_capture_in_dir(&repo, "git", &["rev-parse", "HEAD"], SHORT_TIMEOUT)?;
-            let head_sha = head_out.trim().to_string();
-            if head_sha.is_empty() {
-                return Err("Could not read git rev-parse HEAD.".to_string());
-            }
-
-            let wf_code = run_streaming(
-                &app,
-                &run_id,
-                &current_pid,
-                &cancelled,
-                &recent,
-                &repo,
-                "gh",
-                &["workflow", "run", "release.yml", "--ref", "main"],
-            )?;
-            if wf_code != 0 {
-                return Err(format!("gh workflow run failed (exit {wf_code})."));
-            }
-
-            emit_log(&app, &run_id, "info", format!("Waiting for GitHub Actions run for {}...", &head_sha[..7.min(head_sha.len())]));
-            let mut found_run_id: Option<u64> = None;
-            for _ in 0..15 {
-                if cancelled.load(Ordering::Relaxed) {
-                    return Err("Cancelled.".to_string());
-                }
-                std::thread::sleep(Duration::from_secs(3));
-                if let Some((id, url)) = find_workflow_run(&repo, &head_sha) {
-                    found_run_id = Some(id);
-                    run_url = url;
-                    break;
-                }
-            }
-            let wf_run_id = found_run_id.ok_or_else(|| {
-                "Timed out waiting for GitHub Actions to create the workflow run.".to_string()
-            })?;
-            if let Some(ref url) = run_url {
-                emit_log(&app, &run_id, "info", format!("Workflow run #{wf_run_id}: {url}"));
-            }
-            emit_step(&app, &run_id, "dispatch", "done", Some(format!("#{wf_run_id}")));
-
-            // 6. Watch workflow
-            current_step = "watch";
-            emit_step(&app, &run_id, "watch", "running", Some("Building on GitHub Actions...".to_string()));
-            let wf_id_str = wf_run_id.to_string();
-            let watch_code = run_streaming(
-                &app,
-                &run_id,
-                &current_pid,
-                &cancelled,
-                &recent,
-                &repo,
-                "gh",
-                &["run", "watch", &wf_id_str, "--exit-status", "--interval", "15"],
-            )?;
-            if watch_code != 0 {
-                if let Ok((_, log_out, _, _)) = run_capture_in_dir(
-                    &repo,
-                    "gh",
-                    &["run", "view", &wf_id_str, "--log-failed"],
-                    SHORT_TIMEOUT,
-                ) {
-                    let lines: Vec<&str> = log_out.lines().collect();
-                    let tail_start = lines.len().saturating_sub(60);
-                    for l in &lines[tail_start..] {
-                        let cleaned = clean_log_line(l);
-                        push_recent(&recent, &cleaned);
-                        emit_log(&app, &run_id, "err", cleaned);
-                    }
-                }
-                return Err(format!("GitHub Actions run #{wf_run_id} failed (exit {watch_code})."));
-            }
-            emit_step(&app, &run_id, "watch", "done", Some("CI passed".to_string()));
-
-            // 7. Report live release
-            current_step = "report";
-            emit_step(&app, &run_id, "report", "running", None);
-            let (rel_url, rel_assets) = fetch_release_details(&repo, &tag);
-            release_url = rel_url;
-            assets = rel_assets;
-
-            if let Some(ref url) = release_url {
-                emit_log(&app, &run_id, "info", format!("Release live: {url}"));
-            }
-            if !assets.is_empty() {
-                emit_log(&app, &run_id, "info", format!("Assets: {}", assets.join(", ")));
-            }
-            if pre.is_gloria_setup {
-                if let Ok((Some(0), npm_v, _, false)) =
-                    run_capture_in_dir(&repo, "npm", &["view", "gloria-setup", "version"], SHORT_TIMEOUT)
-                {
-                    emit_log(&app, &run_id, "info", format!("npm gloria-setup: {}", npm_v.trim()));
-                }
-            }
-            emit_step(&app, &run_id, "report", "done", Some(tag));
-
-            Ok(())
-        })();
-
-        if let Ok(mut map) = running().lock() {
-            map.remove(&run_id);
+        } else {
+            emit_log(&app, &run_id, "info", "Working tree clean; pushing existing HEAD.".to_string());
         }
 
-        let is_cancelled = cancelled.load(Ordering::Relaxed);
-        match result {
-            Ok(()) => {
-                let _ = app.emit(
-                    EVENT_DONE,
-                    DoneEvent {
-                        run_id: &run_id,
-                        ok: true,
-                        cancelled: false,
-                        old_version,
-                        new_version,
-                        run_url,
-                        release_url,
-                        assets,
-                        error: None,
-                        diagnosis: None,
-                    },
-                );
+        let push_code = run_streaming(
+            &app,
+            &run_id,
+            &current_pid,
+            &cancelled,
+            &recent,
+            &repo,
+            "git",
+            &["push", "origin", "main"],
+        )?;
+        if push_code != 0 {
+            return Err(format!("git push origin main failed (exit {push_code})."));
+        }
+        emit_step(&app, &run_id, "push", "done", Some("origin/main".to_string()));
+
+        // 5. Dispatch workflow & match headSha
+        current_step = "dispatch";
+        emit_step(&app, &run_id, "dispatch", "running", None);
+        let (_, head_out, _, _) =
+            run_capture_in_dir(&repo, "git", &["rev-parse", "HEAD"], SHORT_TIMEOUT)?;
+        let head_sha = head_out.trim().to_string();
+        if head_sha.is_empty() {
+            return Err("Could not read git rev-parse HEAD.".to_string());
+        }
+
+        let wf_code = run_streaming(
+            &app,
+            &run_id,
+            &current_pid,
+            &cancelled,
+            &recent,
+            &repo,
+            "gh",
+            &["workflow", "run", "release.yml", "--ref", "main"],
+        )?;
+        if wf_code != 0 {
+            return Err(format!("gh workflow run failed (exit {wf_code})."));
+        }
+
+        emit_log(&app, &run_id, "info", format!("Waiting for GitHub Actions run for {}...", &head_sha[..7.min(head_sha.len())]));
+        let mut found_run_id: Option<u64> = None;
+        for _ in 0..15 {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Cancelled.".to_string());
             }
-            Err(err) => {
-                let diag = if is_cancelled {
-                    None
-                } else {
-                    let snapshot = recent.lock().map(|b| b.clone()).unwrap_or_default();
-                    Some(diagnose_failure(&err, &snapshot, &new_version))
-                };
-                emit_step(&app, &run_id, current_step, "failed", Some(err.clone()));
-                emit_log(&app, &run_id, "err", err.clone());
-                let _ = app.emit(
-                    EVENT_DONE,
-                    DoneEvent {
-                        run_id: &run_id,
-                        ok: false,
-                        cancelled: is_cancelled,
-                        old_version,
-                        new_version,
-                        run_url,
-                        release_url,
-                        assets,
-                        error: Some(err),
-                        diagnosis: diag,
-                    },
-                );
+            std::thread::sleep(Duration::from_secs(3));
+            if let Some((id, url)) = find_workflow_run(&repo, &head_sha) {
+                found_run_id = Some(id);
+                run_url = url;
+                break;
             }
         }
-    });
+        let wf_run_id = found_run_id.ok_or_else(|| {
+            "Timed out waiting for GitHub Actions to create the workflow run.".to_string()
+        })?;
+        if let Some(ref url) = run_url {
+            emit_log(&app, &run_id, "info", format!("Workflow run #{wf_run_id}: {url}"));
+        }
+        emit_step(&app, &run_id, "dispatch", "done", Some(format!("#{wf_run_id}")));
+        workflow_run_id = Some(wf_run_id);
+        if !watch {
+            emit_step(&app, &run_id, "watch", "skipped", Some("Not watching".to_string()));
+            emit_step(&app, &run_id, "report", "skipped", None);
+            return Ok(());
+        }
 
-    Ok(ReleaseStarted {
-        run_id: run_id_ret,
-        version: version_ret,
-    })
+        // 6. Watch workflow
+        current_step = "watch";
+        emit_step(&app, &run_id, "watch", "running", Some("Building on GitHub Actions...".to_string()));
+        let wf_id_str = wf_run_id.to_string();
+        let watch_code = run_streaming(
+            &app,
+            &run_id,
+            &current_pid,
+            &cancelled,
+            &recent,
+            &repo,
+            "gh",
+            &["run", "watch", &wf_id_str, "--exit-status", "--interval", "15"],
+        )?;
+        if watch_code != 0 {
+            if let Ok((_, log_out, _, _)) = run_capture_in_dir(
+                &repo,
+                "gh",
+                &["run", "view", &wf_id_str, "--log-failed"],
+                SHORT_TIMEOUT,
+            ) {
+                let lines: Vec<&str> = log_out.lines().collect();
+                let tail_start = lines.len().saturating_sub(60);
+                for l in &lines[tail_start..] {
+                    let cleaned = clean_log_line(l);
+                    push_recent(&recent, &cleaned);
+                    emit_log(&app, &run_id, "err", cleaned);
+                }
+            }
+            return Err(format!("GitHub Actions run #{wf_run_id} failed (exit {watch_code})."));
+        }
+        emit_step(&app, &run_id, "watch", "done", Some("CI passed".to_string()));
+
+        // 7. Report live release
+        current_step = "report";
+        emit_step(&app, &run_id, "report", "running", None);
+        let (rel_url, rel_assets) = fetch_release_details(&repo, &tag);
+        release_url = rel_url;
+        assets = rel_assets;
+
+        if let Some(ref url) = release_url {
+            emit_log(&app, &run_id, "info", format!("Release live: {url}"));
+        }
+        if !assets.is_empty() {
+            emit_log(&app, &run_id, "info", format!("Assets: {}", assets.join(", ")));
+        }
+        if pre.is_gloria_setup {
+            if let Ok((Some(0), npm_v, _, false)) =
+                run_capture_in_dir(&repo, "npm", &["view", "gloria-setup", "version"], SHORT_TIMEOUT)
+            {
+                emit_log(&app, &run_id, "info", format!("npm gloria-setup: {}", npm_v.trim()));
+            }
+        }
+        emit_step(&app, &run_id, "report", "done", Some(tag));
+
+        Ok(())
+    })();
+
+    if let Ok(mut map) = running().lock() {
+        map.remove(&run_id);
+    }
+
+    let is_cancelled = cancelled.load(Ordering::Relaxed);
+    let (ok, error, diagnosis) = match result {
+        Ok(()) => (true, None, None),
+        Err(err) => {
+            let diag = if is_cancelled {
+                None
+            } else {
+                let snapshot = recent.lock().map(|b| b.clone()).unwrap_or_default();
+                Some(diagnose_failure(&err, &snapshot, &new_version))
+            };
+            emit_step(&app, &run_id, current_step, "failed", Some(err.clone()));
+            emit_log(&app, &run_id, "err", err.clone());
+            (false, Some(err), diag)
+        }
+    };
+    let outcome = ReleaseOutcome {
+        run_id,
+        repo_path: repo.to_string_lossy().to_string(),
+        ok,
+        cancelled: !ok && is_cancelled,
+        old_version,
+        new_version,
+        workflow_run_id,
+        run_url,
+        release_url,
+        assets,
+        error,
+        diagnosis,
+    };
+    app.done(&outcome);
+    outcome
 }
 
 #[allow(dead_code)]
@@ -2148,6 +2370,47 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    const TEMPLATE_FIXTURE: &str = "name: Release\non:\n  workflow_dispatch:\njobs:\n  check:\n    uses: projectGloria/GloriaSetup/.github/workflows/app-check.yml@v0\n\n  build:\n    needs: check\n    runs-on: windows-latest\n    steps:\n      - uses: actions/checkout@v7\n\n      - name: Build\n        shell: pwsh\n        run: |\n          throw 'Replace this step with the app build, then copy the result into stage/'\n\n      - uses: actions/upload-artifact@v7\n\n  release:\n    uses: projectGloria/GloriaSetup/.github/workflows/app-release.yml@v0\n";
+
+    #[test]
+    fn replaces_only_top_level_json_version() {
+        let raw = "{\n  \"name\": \"x\",\n  \"dependencies\": { \"a\": { \"version\": \"9.9.9\" } },\n  \"version\": \"1.0.0\"\n}\n";
+        let next = replace_first_json_version(raw, "1.0.1").unwrap();
+        assert!(next.contains("\"version\": \"9.9.9\""));
+        assert!(next.contains("\"version\": \"1.0.1\""));
+        assert_eq!(read_json_version(&next).as_deref(), Some("1.0.1"));
+        assert!(replace_first_json_version("{\"a\": {\"version\": \"1\"}}", "2").is_none());
+    }
+
+    #[test]
+    fn gradle_version_ignores_property_lookups() {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("brain-gradle-{nanos}"));
+        fs::create_dir_all(dir.join("app")).unwrap();
+        let lookup = "android {\n    versionName = props.getProperty(\"versionName\")\n    runner = \"x\"\n}\n";
+        fs::write(dir.join("app/build.gradle.kts"), lookup).unwrap();
+        assert!(detect_version_files(&dir, false).iter().all(|(f, _)| f != "app/build.gradle.kts"));
+        fs::write(dir.join("app/build.gradle.kts"), "android {\n    versionName = \"1.2.3\"\n}\n").unwrap();
+        assert!(detect_version_files(&dir, false).contains(&("app/build.gradle.kts".to_string(), "1.2.3".to_string())));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workflow_ref_check_accepts_any_ref() {
+        assert!(uses_gloria_workflows("uses: projectGloria/GloriaSetup/.github/workflows/app-check.yml@v0"));
+        assert!(uses_gloria_workflows("uses: projectGloria/GloriaSetup/.github/workflows/app-check.yml@main"));
+        assert!(!uses_gloria_workflows("uses: actions/checkout@v4"));
+    }
+
+    #[test]
+    fn extracts_custom_build_steps() {
+        let raw = "on: push\njobs:\n  build:\n    steps:\n    - uses: actions/checkout@v4\n    - name: Build\n      run: |\n        dotnet publish -o stage\n    - uses: softprops/action-gh-release@v2\n      with:\n        files: x\n";
+        let steps = extract_custom_build_steps(raw).unwrap();
+        assert!(steps.contains("      - name: Build\n        run: |\n          dotnet publish -o stage"));
+        assert!(!steps.contains("checkout"));
+        assert!(!steps.contains("gh-release"));
+    }
 
     fn make_temp_dir(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -2324,7 +2587,7 @@ mod tests {
         )
         .unwrap();
 
-        let created = bootstrap_gloria_setup(&dir, Some("0.1.1")).unwrap();
+        let created = bootstrap_gloria_setup_with(&dir, Some("0.1.1"), Some(TEMPLATE_FIXTURE)).unwrap();
         assert_eq!(
             created,
             vec![
@@ -2342,8 +2605,8 @@ mod tests {
         assert!(toml_raw.contains("'%LOCALAPPDATA%\\com.projectgloria.festinalente'"));
 
         let wf_raw = read_utf8(&dir.join(".github/workflows/release.yml")).unwrap();
-        assert!(wf_raw.contains("GloriaSetup/.github/workflows/app-check.yml@main"));
-        assert!(wf_raw.contains("GloriaSetup/.github/workflows/app-release.yml@main"));
+        assert!(wf_raw.contains("GloriaSetup/.github/workflows/app-check.yml@v0"));
+        assert!(wf_raw.contains("GloriaSetup/.github/workflows/app-release.yml@v0"));
         assert!(wf_raw.contains("festina-lente.exe"));
 
         let _ = fs::remove_dir_all(&dir);

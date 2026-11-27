@@ -2,7 +2,9 @@
 
 mod agent_runs;
 mod brain_core;
+mod cli;
 mod clis;
+mod compile;
 mod config;
 mod dna;
 mod gitignore;
@@ -600,6 +602,9 @@ async fn open_url_cmd(url: String) -> Result<(), String> {
 }
 
 fn main() {
+    if let Some(code) = cli::run_from_args() {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![

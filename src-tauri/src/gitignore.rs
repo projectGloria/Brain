@@ -141,7 +141,8 @@ pub fn save_template(brain_repo: Option<&Path>, content: &str) -> Result<Gitigno
     read_template(brain_repo)
 }
 
-/// MISSING / MATCHES / DIFFERS / NO TEMPLATE for a repo, comparing normalized text.
+/// MISSING / MATCHES / DIFFERS / NO TEMPLATE for a repo. MATCHES means every template
+/// rule is present; extra repo-specific rules are allowed (apply keeps them).
 pub fn quick_status(repo_path: &Path, template: Option<&str>) -> String {
     let Some(tpl) = template else {
         return "NO TEMPLATE".to_string();
@@ -151,9 +152,33 @@ pub fn quick_status(repo_path: &Path, template: Option<&str>) -> String {
         return "MISSING".to_string();
     }
     match read_utf8(&gi) {
-        Ok(text) if normalize_text(&text) == tpl => "MATCHES".to_string(),
-        Ok(_) => "DIFFERS".to_string(),
+        Ok(text) => {
+            let have: BTreeSet<String> = content_lines(&normalize_text(&text)).into_iter().collect();
+            if content_lines(tpl).iter().all(|l| have.contains(l)) {
+                "MATCHES".to_string()
+            } else {
+                "DIFFERS".to_string()
+            }
+        }
         Err(_) => "DIFFERS".to_string(),
+    }
+}
+
+const KEPT_HEADER: &str = "# --- Repo-specific (kept by Brain) ---";
+
+/// The template followed by the repo's own rules that the template does not have.
+pub fn merge(template: &str, existing: &str) -> String {
+    let tpl = ensure_trailing_newline(template);
+    let tpl_set: BTreeSet<String> = content_lines(&tpl).into_iter().collect();
+    let mut seen = BTreeSet::new();
+    let extras: Vec<String> = content_lines(&normalize_text(existing))
+        .into_iter()
+        .filter(|l| !tpl_set.contains(l) && seen.insert(l.clone()))
+        .collect();
+    if extras.is_empty() {
+        tpl
+    } else {
+        format!("{tpl}\n{KEPT_HEADER}\n{}\n", extras.join("\n"))
     }
 }
 
@@ -202,9 +227,19 @@ pub fn apply(repo_path: &Path, brain_repo: Option<&Path>) -> Result<bool, String
     if !tpl_path.is_file() {
         return Err("Save the .gitignore draft in the .gitignore tab before applying it.".to_string());
     }
-    let content = ensure_trailing_newline(&read_utf8(&tpl_path)?);
+    let template = read_utf8(&tpl_path)?;
     let target = repo_path.join(".gitignore");
     let previous_existed = target.is_file();
+    let existing = if previous_existed { read_utf8(&target)? } else { String::new() };
+    let content = merge(&template, &existing);
+    if previous_existed {
+        if normalize_text(&existing) == normalize_text(&content) {
+            return Ok(true);
+        }
+        let backup = repo_path.join(".gitignore.bak");
+        fs::write(&backup, existing.as_bytes())
+            .map_err(|e| format!("Failed to back up '{}': {e}", target.display()))?;
+    }
     fs::write(&target, content.as_bytes())
         .map_err(|e| format!("Failed to write '{}': {e}", target.display()))?;
     Ok(previous_existed)
@@ -269,6 +304,14 @@ mod tests {
         assert_eq!(quick_status(&repo, tpl.as_deref()), "MATCHES");
 
         assert_eq!(quick_status(&repo, None), "NO TEMPLATE");
+
+        fs::write(repo.join(".gitignore"), "secret.db\nnode_modules/\n").unwrap();
+        apply(&repo, Some(&brain)).unwrap();
+        let merged = read_utf8(&repo.join(".gitignore")).unwrap();
+        assert!(merged.starts_with("node_modules/\ndist/\n"));
+        assert!(merged.contains("secret.db"));
+        assert_eq!(read_utf8(&repo.join(".gitignore.bak")).unwrap(), "secret.db\nnode_modules/\n");
+        assert_eq!(quick_status(&repo, tpl.as_deref()), "MATCHES");
         let _ = fs::remove_dir_all(&root);
     }
 }

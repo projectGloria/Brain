@@ -4,7 +4,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::config::{legacy_skill_dir, legacy_skill_dirs};
 
@@ -87,6 +86,19 @@ pub struct SyncResult {
     pub git_excluded: bool,
     pub fingerprint: String,
     pub marker: String,
+    /// True when AGENTS.md was rewritten (sections and/or marker changed).
+    pub agents_updated: bool,
+    pub repo_hash: String,
+    /// "created", "ok", "custom" (exists without `@AGENTS.md`) or "skipped" (no AGENTS.md).
+    pub claude_md: String,
+    pub compile: Option<crate::compile::CompileReport>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyncOptions {
+    /// Re-baseline the repo hash so REPO DRIFT clears (after the AI refreshed
+    /// Commands/Architecture). Without it an existing repo hash is kept.
+    pub accept_repo: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +111,9 @@ pub struct InstallResult {
     pub marker: String,
     pub stub_files: Vec<String>,
     pub legacy_skill_present: bool,
+    pub pruned_skills: Vec<String>,
+    /// Path of the `brain.cmd` shim the skills call, when it could be written.
+    pub brain_cmd: Option<String>,
 }
 
 /// Decodes bytes the way PowerShell's `ReadAllText(..., UTF8)` does: honours UTF-8 and
@@ -417,67 +432,37 @@ pub fn check_repo_with(repo_path: &Path, ctx: &ScanContext) -> Result<RepoStatus
     let line_count = lines.len();
     let last_non_empty = lines.iter().rev().find(|l| !l.trim().is_empty()).copied();
 
-    let marker_re =
-        Regex::new(r"<!--\s*brain-sync:\s*([0-9a-fA-F]{12})\b").expect("valid marker regex");
-    let marker_fp = last_non_empty.and_then(|line| {
-        marker_re
-            .captures(line)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_ascii_lowercase())
-    });
+    let (marker_fp, marker_repo) = match last_non_empty.and_then(parse_marker) {
+        Some((fp, repo)) => (Some(fp), repo),
+        None => (None, None),
+    };
 
-    let agents_mtime: Option<SystemTime> = fs::metadata(&agents_path)
-        .ok()
-        .and_then(|m| m.modified().ok());
-
-    let watch_files = [
-        "package.json",
-        "pyproject.toml",
-        "Cargo.toml",
-        "src-tauri\\Cargo.toml",
-        "src-tauri\\tauri.conf.json",
-        "tauri.conf.json",
-        "gloria.toml",
-        "go.mod",
-    ];
-
+    // REPO DRIFT is content based: a checkout, clone or `touch` never trips it, and
+    // version bumps / dependency updates are ignored (see `canonical_repo_file`).
+    // Old markers without a repo hash never report REPO DRIFT.
     let mut drifted_files = Vec::new();
-    if let Some(a_time) = agents_mtime {
-        for wf in watch_files {
-            let p = repo_path.join(wf.replace('\\', std::path::MAIN_SEPARATOR_STR));
-            if p.is_file() {
-                if let Ok(meta) = fs::metadata(&p) {
-                    if let Ok(mtime) = meta.modified() {
-                        if mtime > a_time {
-                            drifted_files.push(wf.replace('\\', "/"));
-                        }
+    if let Some(ref stored) = marker_repo {
+        let entries = repo_hash_entries(repo_path);
+        if &combine_repo_hash(&entries) != stored {
+            let previous = read_repo_state(&proj_brain);
+            if previous.is_empty() {
+                drifted_files = entries.iter().map(|(n, _)| n.clone()).collect();
+            } else {
+                let now: BTreeMap<&str, &str> =
+                    entries.iter().map(|(n, h)| (n.as_str(), h.as_str())).collect();
+                for (n, h) in &now {
+                    if previous.get(*n).map(String::as_str) != Some(*h) {
+                        drifted_files.push(n.to_string());
+                    }
+                }
+                for n in previous.keys() {
+                    if !now.contains_key(n.as_str()) {
+                        drifted_files.push(format!("{n} (removed)"));
                     }
                 }
             }
-        }
-
-        let wf_dir = repo_path.join(".github").join("workflows");
-        if wf_dir.is_dir() {
-            if let Ok(entries) = fs::read_dir(&wf_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if !p.is_file() {
-                        continue;
-                    }
-                    let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-                        continue;
-                    };
-                    if !name.to_ascii_lowercase().ends_with(".yml") {
-                        continue;
-                    }
-                    if let Ok(meta) = fs::metadata(&p) {
-                        if let Ok(mtime) = meta.modified() {
-                            if mtime > a_time {
-                                drifted_files.push(format!(".github/workflows/{name}"));
-                            }
-                        }
-                    }
-                }
+            if drifted_files.is_empty() {
+                drifted_files.push("watched files".to_string());
             }
         }
     }
@@ -504,7 +489,7 @@ pub fn check_repo_with(repo_path: &Path, ctx: &ScanContext) -> Result<RepoStatus
             status = "REPO DRIFT".to_string();
         }
         msg.push_str(&format!(
-            " Refresh suggested: repo files changed since last sync ({}).",
+            " Refresh suggested: manifests or workflows changed since the last accepted sync ({}); re-run /gloria-init-brain (it ends with `brain sync --accept-repo`).",
             drifted_files.join(", ")
         ));
     }
@@ -564,6 +549,18 @@ pub fn sync_project(
     repo_path: &Path,
     master_dir: &Path,
     fallback_brain_dir: Option<&Path>,
+) -> Result<SyncResult, String> {
+    sync_project_with(repo_path, master_dir, fallback_brain_dir, SyncOptions::default())
+}
+
+/// Copies the master rules into `<repo>/.brain/`, git-excludes it and, when
+/// `AGENTS.md` exists, recompiles the Brain sections, rewrites the marker and
+/// makes sure `CLAUDE.md` imports `@AGENTS.md`. No AI involved.
+pub fn sync_project_with(
+    repo_path: &Path,
+    master_dir: &Path,
+    fallback_brain_dir: Option<&Path>,
+    opts: SyncOptions,
 ) -> Result<SyncResult, String> {
     if !repo_path.is_dir() {
         return Err(format!("'{}' is not an existing folder.", repo_path.display()));
@@ -640,98 +637,231 @@ pub fn sync_project(
     }
 
     let fp = compute_brain_fingerprint(&src_dir, Some(&proj_brain))?;
+
+    let agents_path = repo_path.join("AGENTS.md");
+    let entries = repo_hash_entries(repo_path);
+    let mut repo_hash = combine_repo_hash(&entries);
+    let mut agents_updated = false;
+    let mut compile_report = None;
+    let mut claude_md = "skipped".to_string();
+    let mut marker = format!("<!-- brain-sync: {fp} repo: {repo_hash} -->");
+
+    if agents_path.is_file() {
+        let original = read_utf8(&agents_path)?;
+        let stored_repo = original
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .and_then(parse_marker)
+            .and_then(|(_, r)| r);
+        let accept = opts.accept_repo || stored_repo.is_none();
+        if let (false, Some(stored)) = (accept, stored_repo) {
+            repo_hash = stored;
+        }
+        marker = format!("<!-- brain-sync: {fp} repo: {repo_hash} -->");
+
+        let rules: Vec<crate::compile::RuleFile> = get_brain_files(&src_dir, Some(&proj_brain))
+            .into_iter()
+            .filter_map(|f| {
+                read_utf8(&f.path)
+                    .ok()
+                    .map(|raw| crate::compile::parse_rule(&f.name, &raw))
+            })
+            .collect();
+        let traits = crate::compile::detect_traits(repo_path);
+        let mut report = crate::compile::CompileReport::default();
+        let compiled =
+            crate::compile::compile_agents_text(&original, &rules, &traits, &marker, &mut report);
+        let compiled = if original.contains("\r\n") {
+            compiled.replace('\n', "\r\n")
+        } else {
+            compiled
+        };
+        if compiled != original {
+            write_utf8_no_bom(&agents_path, &compiled)?;
+            agents_updated = true;
+        }
+        let lines = compiled.lines().count();
+        if lines > 120 {
+            report
+                .warnings
+                .push(format!("AGENTS.md is {lines} lines (hard cap 120, target 60)."));
+        }
+        if accept {
+            write_repo_state(&proj_brain, &entries)?;
+        }
+
+        let claude_path = repo_path.join("CLAUDE.md");
+        claude_md = if !claude_path.is_file() {
+            write_utf8_no_bom(&claude_path, "@AGENTS.md\n")?;
+            "created".to_string()
+        } else if read_utf8(&claude_path)?.contains("@AGENTS.md") {
+            "ok".to_string()
+        } else {
+            report
+                .warnings
+                .push("CLAUDE.md exists but does not import @AGENTS.md.".to_string());
+            "custom".to_string()
+        };
+        compile_report = Some(report);
+    }
+
     Ok(SyncResult {
         repo_path: repo_path.to_string_lossy().to_string(),
         copied,
         pruned,
         git_excluded,
-        marker: format!("<!-- brain-sync: {fp} -->"),
+        marker,
         fingerprint: fp,
+        agents_updated,
+        repo_hash,
+        claude_md,
+        compile: compile_report,
     })
 }
 
-pub fn sync_skill_files_from_init(repo_root: &Path) -> Result<bool, String> {
-    let init_path = repo_root.join("brain").join("init.md");
-    if !init_path.is_file() {
-        return Ok(false);
+/// `(fingerprint, repo hash)` from a `<!-- brain-sync: <fp> [repo: <hash>] -->` line.
+pub fn parse_marker(line: &str) -> Option<(String, Option<String>)> {
+    let re = Regex::new(
+        r"<!--\s*brain-sync:\s*([0-9a-fA-F]{12})\b(?:\s+repo:\s*([0-9a-fA-F]{12})\b)?",
+    )
+    .expect("valid marker regex");
+    let c = re.captures(line)?;
+    Some((
+        c.get(1)?.as_str().to_ascii_lowercase(),
+        c.get(2).map(|m| m.as_str().to_ascii_lowercase()),
+    ))
+}
+
+const REPO_WATCH_FILES: &[&str] = &[
+    "package.json",
+    "pyproject.toml",
+    "Cargo.toml",
+    "src-tauri/Cargo.toml",
+    "src-tauri/tauri.conf.json",
+    "tauri.conf.json",
+    "gloria.toml",
+    "go.mod",
+];
+
+const JSON_IGNORED_KEYS: &[&str] = &[
+    "version",
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+];
+
+const TOML_IGNORED_KEYS: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies", "target"];
+
+fn sha12(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect::<String>()[..12].to_string()
+}
+
+fn strip_toml_noise(table: &mut toml::Table) {
+    table.remove("version");
+    for k in TOML_IGNORED_KEYS {
+        table.remove(*k);
     }
+}
 
-    let raw = read_utf8(&init_path)?.replace("\r\n", "\n");
-    let marker = "## Non-Negotiable Rules\n";
-    let Some(pos) = raw.find(marker) else {
-        return Err(format!("Could not find '{marker}' in {}", init_path.display()));
-    };
-    let body = &raw[pos..];
+/// Canonical text of a watched file: versions and dependency lists are dropped so
+/// releases and dependency bumps don't flag REPO DRIFT; everything else counts.
+fn canonical_repo_file(rel: &str, raw: &str) -> String {
+    let norm = normalize_text(raw);
+    let lower = rel.to_ascii_lowercase();
+    if lower.ends_with(".json") {
+        if let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str::<serde_json::Value>(&norm) {
+            for k in JSON_IGNORED_KEYS {
+                map.remove(*k);
+            }
+            let sorted: BTreeMap<String, serde_json::Value> = map.into_iter().collect();
+            return serde_json::to_string(&sorted).unwrap_or(norm);
+        }
+    } else if lower.ends_with(".toml") {
+        if let Ok(mut table) = norm.parse::<toml::Table>() {
+            strip_toml_noise(&mut table);
+            for (_, v) in table.iter_mut() {
+                if let toml::Value::Table(sub) = v {
+                    strip_toml_noise(sub);
+                    if let Some(toml::Value::Table(pkg)) = sub.get_mut("package") {
+                        pkg.remove("version");
+                    }
+                }
+            }
+            let sorted: BTreeMap<String, toml::Value> = table.into_iter().collect();
+            return toml::to_string(&sorted).unwrap_or(norm);
+        }
+    }
+    norm
+}
 
-    let std_header = concat!(
-        "---\n",
-        "name: gloria-init-brain\n",
-        "description: \u{E800} Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Use ONLY when the user explicitly asks to run gloria-init-brain, init-brain, bootstrap or refresh project context, learn/persist a rule, or check whether AGENTS.md is stale. Do not use for ordinary coding tasks.\n",
-        "---\n",
-        "# \u{E800} gloria-init-brain — Project Context & Brain Compiler\n\n",
-        "Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.\n\n",
-        "User arguments: any text the user typed when invoking this skill (e.g. `check`, `learn <rule>`, or a short project description such as \"Tauri desktop app for X\").\n",
-    );
+/// `(relative path, 12-hex content hash)` for every watched file that exists, sorted.
+pub fn repo_hash_entries(repo: &Path) -> Vec<(String, String)> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for rel in REPO_WATCH_FILES {
+        let p = repo.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !p.is_file() {
+            continue;
+        }
+        if let Ok(raw) = read_utf8(&p) {
+            out.insert(rel.to_string(), sha12(&canonical_repo_file(rel, &raw)));
+        }
+    }
+    if let Ok(entries) = fs::read_dir(repo.join(".github").join("workflows")) {
+        for e in entries.flatten() {
+            let p = e.path();
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let lower = name.to_ascii_lowercase();
+            if p.is_file() && (lower.ends_with(".yml") || lower.ends_with(".yaml")) {
+                if let Ok(raw) = read_utf8(&p) {
+                    out.insert(format!(".github/workflows/{name}"), sha12(&normalize_text(&raw)));
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
 
-    let claude_header = concat!(
-        "---\n",
-        "name: gloria-init-brain\n",
-        "description: \u{E800} Generate, bootstrap, refresh, or update AGENTS.md by combining repo ground truth with personal rules from .brain/*.md (synced from the master ~/.brain). Run only when the user explicitly asks for gloria-init-brain, init-brain, to bootstrap or refresh project context, to learn/persist a rule, or to check whether AGENTS.md is stale.\n",
-        "argument-hint: \"[check] | [learn <rule>] | [short project description for bootstrap]\"\n",
-        "disable-model-invocation: true\n",
-        "---\n",
-        "# \u{E800} /gloria-init-brain — Project Context & Brain Compiler\n\n",
-        "Generate, bootstrap, refresh, or update `AGENTS.md` by combining **repository ground truth** with matching personal rules from `.brain/*.md`, enforcing a strict 120-line budget and aggressive pruning on every run.\n\n",
-        "User arguments: `$ARGUMENTS`\n",
-    );
+pub fn combine_repo_hash(entries: &[(String, String)]) -> String {
+    let mut buf = String::new();
+    for (n, h) in entries {
+        buf.push_str(n);
+        buf.push('\n');
+        buf.push_str(h);
+        buf.push('\n');
+    }
+    sha12(&buf)
+}
 
-    let claude_body = body
-        .replace("If the user's invocation starts with", "If `$ARGUMENTS` starts with")
-        .replace("If the user's invocation text is exactly", "If `$ARGUMENTS` is exactly")
-        .replace("If neither the invocation text nor", "If neither `$ARGUMENTS` nor");
+pub fn compute_repo_hash(repo: &Path) -> String {
+    combine_repo_hash(&repo_hash_entries(repo))
+}
 
-    write_utf8_no_bom(
-        &repo_root
-            .join("skills")
-            .join("antigravity")
-            .join("gloria-init-brain")
-            .join("SKILL.md"),
-        &format!("{std_header}{body}"),
-    )?;
-    write_utf8_no_bom(
-        &repo_root
-            .join("skills")
-            .join("codex")
-            .join("gloria-init-brain")
-            .join("SKILL.md"),
-        &format!("{std_header}{body}"),
-    )?;
-    write_utf8_no_bom(
-        &repo_root
-            .join("skills")
-            .join("claude-code")
-            .join("gloria-init-brain")
-            .join("SKILL.md"),
-        &format!("{claude_header}{claude_body}"),
-    )?;
+/// Per-file hashes at the last accepted sync, so REPO DRIFT can name the changed files.
+const REPO_STATE_FILE: &str = "repo-state.json";
 
-    Ok(true)
+fn read_repo_state(proj_brain: &Path) -> BTreeMap<String, String> {
+    read_utf8(&proj_brain.join(REPO_STATE_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_repo_state(proj_brain: &Path, entries: &[(String, String)]) -> Result<(), String> {
+    let map: BTreeMap<&str, &str> = entries.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let json = serde_json::to_string_pretty(&map).map_err(|e| e.to_string())?;
+    write_utf8_no_bom(&proj_brain.join(REPO_STATE_FILE), &format!("{json}\n"))
 }
 
 pub fn install_brain(repo_root: Option<&Path>, master_dir: &Path) -> Result<InstallResult, String> {
-    let home = dirs::home_dir().ok_or_else(|| "Could not resolve user home directory".to_string())?;
-    let mut compiled_skills = 0usize;
-
     let is_repo_root = repo_root
         .map(|r| r.join("brain").join("init.md").is_file())
         .unwrap_or(false);
-
-    if is_repo_root {
-        let root = repo_root.unwrap();
-        if sync_skill_files_from_init(root)? {
-            compiled_skills = 3;
-        }
-    }
+    let compiled_skills = if is_repo_root { 3 } else { 0 };
 
     let source_brain_dir = if is_repo_root {
         repo_root.unwrap().join("brain")
@@ -800,62 +930,13 @@ pub fn install_brain(repo_root: Option<&Path>, master_dir: &Path) -> Result<Inst
     }
 
     let mut installed_skills_count = 0usize;
+    let mut pruned_skills = Vec::new();
     if is_repo_root {
-        let root = repo_root.unwrap();
-        let tool_targets = [
-            ("skills\\claude-code", home.join(".claude").join("skills")),
-            ("skills\\codex", home.join(".agents").join("skills")),
-            (
-                "skills\\antigravity",
-                home.join(".gemini").join("config").join("skills"),
-            ),
-        ];
-
-        for (src_rel, dst_root) in tool_targets {
-            let src_root = root.join(src_rel.replace('\\', std::path::MAIN_SEPARATOR_STR));
-            if !src_root.is_dir() {
-                continue;
-            }
-
-            for legacy in [
-                "init-brain",
-                "monjita-init-brain",
-                "monjita-github-release",
-                "monjita-github-repo-about",
-                "monjita-github-repo-readme",
-            ] {
-                let old_dir = dst_root.join(legacy);
-                if old_dir.exists() {
-                    let _ = fs::remove_dir_all(&old_dir);
-                }
-            }
-
-            if let Ok(dirs) = fs::read_dir(&src_root) {
-                for entry in dirs.flatten() {
-                    let skill_dir = entry.path();
-                    if !skill_dir.is_dir() {
-                        continue;
-                    }
-                    let src_file = skill_dir.join("SKILL.md");
-                    if !src_file.is_file() {
-                        continue;
-                    }
-                    let Some(skill_name) = skill_dir.file_name().and_then(|n| n.to_str()) else {
-                        continue;
-                    };
-                    let dst_dir = dst_root.join(skill_name);
-                    fs::create_dir_all(&dst_dir).map_err(|e| {
-                        format!("Failed to create skill dir '{}': {e}", dst_dir.display())
-                    })?;
-                    let dst_file = dst_dir.join("SKILL.md");
-                    fs::copy(&src_file, &dst_file).map_err(|e| {
-                        format!("Failed to install skill '{}': {e}", dst_file.display())
-                    })?;
-                    installed_skills_count += 1;
-                }
-            }
-        }
+        let report = crate::skills::install_all(repo_root.unwrap())?;
+        installed_skills_count = report.installed;
+        pruned_skills = report.pruned;
     }
+    let brain_cmd = write_brain_cmd_shim(master_dir);
 
     let fp = compute_brain_fingerprint(master_dir, None)?;
     let mut stub_files = Vec::new();
@@ -878,7 +959,28 @@ pub fn install_brain(repo_root: Option<&Path>, master_dir: &Path) -> Result<Inst
         fingerprint: fp,
         stub_files,
         legacy_skill_present,
+        pruned_skills,
+        brain_cmd,
     })
+}
+
+/// Writes `<master>/brain.cmd` (`@"<Brain.exe>" %*`). Brain.exe is a GUI-subsystem
+/// binary, so PowerShell would not wait for it; a batch shim makes every shell wait
+/// and keeps the exit code. Returns the shim path, or None when not run from Brain.exe.
+pub fn write_brain_cmd_shim(master_dir: &Path) -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let name = exe.file_stem()?.to_str()?.to_ascii_lowercase();
+    if name != "brain" {
+        return None;
+    }
+    let shim = master_dir.join("brain.cmd");
+    let body = format!("@echo off
+\"{}\" %*
+", exe.display());
+    if read_utf8(&shim).ok().as_deref() != Some(body.as_str()) {
+        write_utf8_no_bom(&shim, &body).ok()?;
+    }
+    Some(shim.to_string_lossy().to_string())
 }
 
 pub fn remove_legacy_skill() -> Result<bool, String> {

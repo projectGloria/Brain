@@ -74,6 +74,18 @@ export interface SyncResult {
   git_excluded: boolean;
   fingerprint: string;
   marker: string;
+  /** True when AGENTS.md was rewritten (compiled sections and/or marker). */
+  agents_updated: boolean;
+  repo_hash: string;
+  /** "created" | "ok" | "custom" | "skipped" */
+  claude_md: string;
+  compile: {
+    traits: string[];
+    inline_rules: number;
+    playbooks: number;
+    overridden_topics: string[];
+    warnings: string[];
+  } | null;
 }
 
 export interface BatchSyncItem {
@@ -92,6 +104,9 @@ export interface InstallResult {
   marker: string;
   stub_files: string[];
   legacy_skill_present: boolean;
+  pruned_skills: string[];
+  /** The `brain.cmd` shim the skills call, when it could be written. */
+  brain_cmd: string | null;
 }
 
 export interface RuleSummary {
@@ -392,6 +407,8 @@ export interface ReleaseRequest {
   run_local_check?: boolean;
   retry_same_version?: boolean;
   pre_fix?: string | null;
+  /** Watch the workflow until the release is live (default true). */
+  watch?: boolean;
 }
 
 export interface ReleaseFailureDiagnosis {
@@ -422,10 +439,12 @@ export interface ReleaseLogEvent {
 
 export interface ReleaseDoneEvent {
   run_id: string;
+  repo_path: string;
   ok: boolean;
   cancelled: boolean;
   old_version: string | null;
   new_version: string;
+  workflow_run_id: number | null;
   run_url: string | null;
   release_url: string | null;
   assets: string[];

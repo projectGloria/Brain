@@ -22,11 +22,11 @@ const STATUS_EXPLANATIONS: Record<string, string> = {
   "UP TO DATE":
     "AGENTS.md carries the current master brain-sync hash, stays within 120 lines, and matches your local rules.",
   "BRAIN DRIFT":
-    "Your master rules in ~/.brain changed since AGENTS.md was last generated. Run /gloria-init-brain in this repo to refresh AGENTS.md.",
+    "Your master rules in ~/.brain changed since AGENTS.md was last synced. Click Sync (or run `brain sync` in the repo): Brain recompiles Personal Rules and Playbooks and rewrites the marker, no AI needed.",
   "REPO DRIFT":
-    "This repo's local .brain/*.md copies differ from ~/.brain. Click Sync .brain/ to mirror the latest master rules.",
+    "This repo's manifests or workflows changed since the last accepted sync, so the repo-specific parts of AGENTS.md may be stale. Re-run /gloria-init-brain; it ends with `brain sync --accept-repo`.",
   "OVER BUDGET":
-    "AGENTS.md exceeds the 120-line budget. Trim it or re-run /gloria-init-brain so agents load rules reliably.",
+    "AGENTS.md exceeds the 120-line budget (aim for about 60). Trim it or re-run /gloria-init-brain so agents load rules reliably.",
   "NO MARKER":
     "AGENTS.md exists but is missing its <!-- brain-sync: ... --> fingerprint. Run /gloria-init-brain to add it.",
   "NO AGENTS.MD":
@@ -100,9 +100,9 @@ export function DashboardView({
     return { total: repos.length, upToDate, brainDrift, repoDrift, attention, missing };
   }, [repos]);
 
-  // Only repos whose .brain/ copy is actually out of date. BRAIN DRIFT and
-  // NO MARKER are AGENTS.md problems that /gloria-init-brain fixes, so a
-  // .brain/ sync cannot clear them and they must not be counted here.
+  // Repos a deterministic sync fixes: an out-of-date .brain/ copy, or BRAIN DRIFT
+  // (sync recompiles the Brain-owned AGENTS.md sections). NO MARKER and REPO DRIFT
+  // need /gloria-init-brain, so they are not counted here.
   const syncablePaths = useMemo(
     () =>
       repos
@@ -112,7 +112,7 @@ export function DashboardView({
             r.status !== "ERROR" &&
             r.is_git_repo &&
             !r.is_brain_repo &&
-            !r.project_brain_in_sync
+            (!r.project_brain_in_sync || r.status === "BRAIN DRIFT")
         )
         .map((r) => r.repo_path),
     [repos]
@@ -179,13 +179,13 @@ export function DashboardView({
             className="btn btn-primary"
             onClick={() => onSyncAllDrifted(syncablePaths)}
             disabled={syncingAll || syncablePaths.length === 0}
-            title="Mirror ~/.brain/*.md into every repo whose .brain/ copy is out of date"
+            title="Mirror ~/.brain/*.md and recompile the Brain sections of AGENTS.md in every repo that is out of date"
           >
             <Sparkles size={14} className={syncingAll ? "spin" : ""} />
             <span>
               {syncingAll
                 ? "Syncing..."
-                : `Sync .brain/ (${syncablePaths.length})`}
+                : `Sync (${syncablePaths.length})`}
             </span>
           </button>
         </div>
@@ -293,7 +293,7 @@ export function DashboardView({
               repo.sync_marker !== "none" &&
               repo.sync_marker !== repo.expected;
             const isSyncing = syncingRepos.has(repo.repo_path);
-            const needsInit = repo.status === "BRAIN DRIFT" || repo.status === "NO MARKER";
+            const needsInit = repo.status === "REPO DRIFT" || repo.status === "NO MARKER";
             const canSync =
               repo.status !== "NO AGENTS.MD" && repo.status !== "ERROR" && !repo.is_brain_repo;
             const gi = repo.gitignore_status;
@@ -443,10 +443,10 @@ export function DashboardView({
                     className="btn btn-sm"
                     onClick={() => onSyncRepo(repo.repo_path)}
                     disabled={isSyncing || syncingAll || !canSync}
-                    title="Sync ~/.brain/*.md into <repo>/.brain/ and update .git/info/exclude"
+                    title="Mirror ~/.brain/*.md into .brain/, recompile Personal Rules and Playbooks in AGENTS.md, rewrite the marker (same as brain sync)"
                   >
                     <RefreshCw size={12} className={isSyncing ? "spin" : ""} />
-                    <span>Sync .brain/</span>
+                    <span>Sync</span>
                   </button>
                   {repo.is_git_repo && gi === "MISSING" && (
                     <button
